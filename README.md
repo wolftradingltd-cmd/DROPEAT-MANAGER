@@ -1,167 +1,262 @@
-# UberCommissions - Suivi MLM Uber Eats
+# 🍔 Suivi Commissions Uber Eats - MLM
 
-## Présentation
-Application web pour gérer le suivi des commissions Uber Eats dans une structure MLM (Multi-Level Marketing) à 3 niveaux :
-- **Agents commerciaux (N1)** qui ramènent des restaurants/snacks
-- **Sous-agents (N2)** rattachés à un agent N1
-- **Sous-sous-agents (N3)** rattachés à un sous-agent N2
+## Vue d'ensemble
 
-Chaque snack/restaurant peut avoir plusieurs **marques virtuelles** sur Uber Eats. L'application importe les CSV exportés depuis Uber Eats Manager (par marque virtuelle) et calcule automatiquement les commissions selon des **paliers progressifs** configurables.
+Application web complète pour gérer le suivi des commissions de votre activité **marques virtuelles Uber Eats** avec un système commercial **MLM à 3 niveaux**.
 
-## URLs
-- **Local (sandbox dev)** : http://localhost:3000
-- **Public sandbox** : https://3000-i0ckn8yixm6q6inqrrm6t-2e1b9533.sandbox.novita.ai
-- **Production Cloudflare Pages** : *(non encore déployé)*
+### Concept business
+- Vous démarchez des snacks et leur ouvrez **plusieurs marques virtuelles** sur Uber Eats (4, 5, 6 marques par snack)
+- Vous prenez des **commissions sur chaque commande**
+- Vos **agents commerciaux** (et leurs sous-agents et sous-sous-agents) touchent aussi des commissions
+- Le tout par **paliers progressifs** (style tranches d'imposition)
 
-## Fonctionnalités complétées (v1)
+---
 
-### Dashboard
-- Stats globales : nb agents (par niveau), restaurants, marques, commandes
-- CA total + CA du mois en cours
+## ✅ Fonctionnalités implémentées
+
+### 👥 Gestion des agents (MLM 3 niveaux)
+- Création/modification/suppression d'agents
+- Hiérarchie : **Agent → Sous-agent → Sous-sous-agent**
+- Chaque agent peut avoir des sous-agents rattachés
+- IBAN pour le paiement des commissions
+- Statut actif/inactif
+
+### 🏪 Gestion des restaurants & marques virtuelles
+- Création de restaurants (snacks partenaires)
+- Affectation à un agent (celui qui a ramené le restaurant)
+- **Plusieurs marques virtuelles par restaurant** (Uber Store ID optionnel)
+- Suivi de la date de signature
+
+### 📥 Import CSV Uber Eats
+- Upload par drag & drop
+- **Détection automatique** des colonnes (FR + EN) :
+  - Order ID, Order Date, Order Total, Uber Service Fee, Payout, Status
+- **Mapping manuel** ajustable si besoin
+- Détection des **doublons** (par Uber Order ID)
+- Support des formats de date FR (dd/mm/yyyy) et internationaux
+- Support des nombres FR (virgule) et EN (point)
+- **Aperçu des 5 premières lignes** avant import
+- Historique complet des imports (annulables)
+
+### 💰 Système de commissions par paliers
+- **Paliers entreprise** : % sur le CA net du restaurant (ex: 0-5k€ = 15%, 5-10k€ = 12%, etc.)
+- **Paliers agent (N1)** : % sur la commission entreprise
+- **Paliers sous-agent (N2)** : % sur la commission entreprise
+- **Paliers sous-sous-agent (N3)** : % sur la commission entreprise
+- Calcul **par tranches progressives** (style impôts)
+- **Configuration libre** : ajout/modif/suppression des paliers via UI
+
+### 📊 Calcul automatique des commissions
+- Vue **par restaurant** : CA, commission entreprise, commissions par niveau
+- Vue **par agent** : montant total à payer à chaque agent (toutes commissions cumulées)
+- Détail par agent : commissions par restaurant
+- Sélection mois/année
+
+### 💸 Suivi des paiements
+- Création automatique depuis la page Commissions
+- Statuts : `en_attente` / `payé` / `annulé`
+- Méthode (virement, espèces, chèque), référence, date
+- Filtres par mois/année/agent
+- Marquage en un clic comme payé
+
+### 📈 Dashboard
+- Stats globales (agents, restaurants, marques, commandes, CA)
 - Top 5 restaurants par CA
 - Top 5 agents par CA généré
-- Graphique évolution CA sur 6 mois
+- Évolution du CA sur 6 mois (graphique Chart.js)
 
-### Gestion MLM des agents
-- CRUD agents avec niveau hiérarchique (1, 2 ou 3)
-- Liaison parent/enfant (sous-agent → agent / sous-sous-agent → sous-agent)
-- Vue arbre hiérarchique
-- Coordonnées + IBAN pour paiement des commissions
+---
 
-### Restaurants & Marques virtuelles
-- CRUD restaurants avec agent référent
-- Plusieurs marques virtuelles par restaurant
-- ID Uber Eats stockable par marque
-- Vue détaillée avec stats par marque (commandes, CA)
+## 🌐 URIs de l'application
 
-### Import CSV Uber Eats
-- Drag & drop ou sélection de fichier
-- **Détection automatique des colonnes** (FR + EN) : ID commande, date, total, frais Uber, net, statut
-- Mapping manuel possible si la détection échoue
-- Aperçu avant import
-- **Détection automatique des doublons** (basé sur Order ID)
-- Support des dates FR (`dd/mm/yyyy`) et EN (`yyyy-mm-dd`)
-- Support des nombres avec séparateurs FR (virgule) et EN (point)
-- Historique complet des imports avec possibilité de suppression
+### Pages frontend (SPA)
+| Route | Description |
+|-------|-------------|
+| `/` | Application complète (navigation interne par sidebar) |
 
-### Calcul des commissions
-- **Paliers progressifs** (style tranches d'imposition) configurables par type :
-  - Entreprise (sur CA Net mensuel du restaurant)
-  - Agent N1 (sur la commission entreprise)
-  - Sous-agent N2 (sur la commission entreprise)
-  - Sous-sous-agent N3 (sur la commission entreprise)
-- Calcul automatique mensuel par restaurant
-- Vue récap **par restaurant** : CA, commissions de chaque niveau, marge finale
-- Vue récap **par agent** : montant total à payer à chaque agent (toutes ses commissions cumulées)
-- Détection auto de la chaîne hiérarchique selon le niveau de l'agent qui a ramené le restaurant
+### API REST
 
-### Paiements
-- Génération de paiement directement depuis l'écran commissions
-- Suivi en attente / payé / annulé
-- Date de paiement, méthode (virement / espèces / etc.), référence
-- Filtrage par mois/année/agent
-- Stats : total dû, total payé
+#### Dashboard
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| GET | `/api/dashboard` | Statistiques globales |
 
-### Configuration paliers
-- Édition des taux par tranche (CA min/max, taux %)
-- Mode mensuel ou cumulatif
-- 4 types de paliers (entreprise, agent, sous-agent, sous-sous-agent)
-
-## URIs / Endpoints API
-
-| Méthode | URL | Description |
-|---------|-----|-------------|
-| GET | `/api/health` | Healthcheck |
-| GET | `/api/dashboard` | Stats globales + tops |
-| GET/POST/PUT/DELETE | `/api/agents` | CRUD agents |
+#### Agents
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| GET | `/api/agents` | Liste tous les agents |
 | GET | `/api/agents/tree` | Arbre hiérarchique |
-| GET/POST/PUT/DELETE | `/api/restaurants` | CRUD restaurants |
+| GET | `/api/agents/:id` | Détail d'un agent |
+| POST | `/api/agents` | Créer un agent |
+| PUT | `/api/agents/:id` | Modifier un agent |
+| DELETE | `/api/agents/:id` | Supprimer un agent |
+
+#### Restaurants & Marques
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| GET | `/api/restaurants` | Liste des restaurants |
 | GET | `/api/restaurants/:id` | Détail + marques |
-| GET | `/api/restaurants/marques/all` | Toutes les marques |
-| POST | `/api/restaurants/:id/marques` | Créer marque |
-| PUT/DELETE | `/api/restaurants/marques/:id` | Modifier/supprimer marque |
-| GET/POST/PUT/DELETE | `/api/paliers` | CRUD paliers |
+| POST | `/api/restaurants` | Créer |
+| PUT | `/api/restaurants/:id` | Modifier |
+| DELETE | `/api/restaurants/:id` | Supprimer |
+| GET | `/api/restaurants/marques/all` | Toutes les marques (avec resto + agent) |
+| POST | `/api/restaurants/:id/marques` | Créer une marque virtuelle |
+| PUT | `/api/restaurants/marques/:marque_id` | Modifier une marque |
+| DELETE | `/api/restaurants/marques/:marque_id` | Supprimer |
+
+#### Imports CSV
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| POST | `/api/imports/preview` | Analyse un CSV (détection colonnes) |
+| POST | `/api/imports` | Importe les commandes |
+| GET | `/api/imports` | Historique des imports |
+| DELETE | `/api/imports/:id` | Annuler un import (et ses commandes) |
+
+#### Paliers de commission
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| GET | `/api/paliers` | Tous les paliers (groupés par type) |
+| POST | `/api/paliers` | Créer un palier |
+| PUT | `/api/paliers/:id` | Modifier |
+| DELETE | `/api/paliers/:id` | Supprimer |
 | POST | `/api/paliers/replace/:type` | Remplacer tous les paliers d'un type |
-| POST | `/api/imports/preview` | Détection colonnes CSV |
-| POST | `/api/imports` | Import CSV (params: marque_id, csv, mapping) |
-| GET | `/api/imports` | Historique imports |
-| DELETE | `/api/imports/:id` | Supprimer un import + ses commandes |
-| GET | `/api/commissions/recap?annee=&mois=` | Récap par restaurant |
-| GET | `/api/commissions/agents?annee=&mois=` | Récap par agent (montant à payer) |
-| GET | `/api/commissions/agent/:id?annee=&mois=` | Détail commissions d'un agent |
-| GET/POST/PUT/DELETE | `/api/paiements` | CRUD paiements |
+
+#### Commissions
+| Méthode | Route | Params | Description |
+|---------|-------|--------|-------------|
+| GET | `/api/commissions/recap` | `?annee=2026&mois=4` | Récap par restaurant |
+| GET | `/api/commissions/agents` | `?annee=2026&mois=4` | Montants à payer par agent |
+| GET | `/api/commissions/agent/:id` | `?annee=2026&mois=4` | Détail commissions agent |
+
+#### Paiements
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| GET | `/api/paiements` | Liste (filtres `?annee=&mois=&agent_id=`) |
+| POST | `/api/paiements` | Créer/MAJ paiement (upsert) |
+| PUT | `/api/paiements/:id` | Modifier |
+| DELETE | `/api/paiements/:id` | Supprimer |
 | POST | `/api/paiements/:id/pay` | Marquer comme payé |
 
-## Architecture des données
-- **agents** : id, nom, prénom, email, niveau (1/2/3), parent_id, iban, actif
-- **restaurants** : id, nom, ville, agent_id, date_signature
-- **marques_virtuelles** : id, restaurant_id, nom, uber_store_id
-- **commandes** : id, marque_id, uber_order_id, date_commande, montant_brut, frais_uber, montant_net, statut
-- **imports_csv** : id, marque_id, nom_fichier, periode, nb_lignes, nb_importees, nb_doublons, montant_total, statut
-- **paliers_commissions** : id, type, base, mode, seuil_min, seuil_max, taux
-- **paiements** : id, agent_id, periode_mois, periode_annee, montant, statut, date_paiement, methode, reference
+---
 
-## Logique de calcul des commissions
-Pour chaque restaurant et chaque mois :
-1. **CA Net** = somme des `montant_net` des commandes du mois (statut ≠ annulée)
-2. **Commission Entreprise** = paliers progressifs appliqués au CA Net
-3. **Commission Agent N1** = paliers appliqués sur la commission entreprise
-4. **Commission Sous-agent N2** = paliers appliqués sur la commission entreprise (si l'agent qui a ramené est N2 ou N3)
-5. **Commission Sous-sous-agent N3** = paliers appliqués sur la commission entreprise (si l'agent qui a ramené est N3)
-6. **Marge entreprise finale** = Comm. Entreprise − (Comm. Agent + Sous-agent + Sous-sous-agent)
+## 🗄️ Architecture des données
 
-**Détection chaîne hiérarchique** : quand un sous-sous-agent (N3) ramène un resto, son parent (N2) et le grand-parent (N1) touchent leurs commissions respectives en plus.
+### Tables D1 (SQLite)
+- **agents** : hiérarchie MLM (niveau 1/2/3 + parent_id)
+- **restaurants** : snacks partenaires (lié à un agent)
+- **marques_virtuelles** : marques sur Uber Eats (liées à un restaurant)
+- **paliers_commissions** : paliers configurables par type
+- **commandes** : lignes Uber Eats importées (CSV)
+- **imports_csv** : historique des imports
+- **paiements** : suivi des paiements aux agents
 
-## Fonctionnalités à implémenter (TODO)
-- 🔜 Authentification (login admin / agents)
-- 🔜 Comptes agents pour qu'ils consultent leurs propres commissions
-- 🔜 Export PDF des fiches de commission par agent
-- 🔜 Export Excel/CSV des récaps
-- 🔜 Notifications email automatiques aux agents
-- 🔜 Mode "cumulatif" effectivement implémenté (actuellement seul "mensuel" est utilisé)
-- 🔜 Multi-devises
-- 🔜 Gestion des avoirs / annulations a posteriori
-- 🔜 Dashboard mobile-friendly amélioré
-- 🔜 Comparaison mois N vs N-1
-- 🔜 Filtres avancés (par agent, par ville, etc.)
+### Logique de calcul
+1. CA net mensuel par restaurant = somme des `montant_net` des commandes
+2. **Commission entreprise** = paliers progressifs sur le CA net
+3. **Commission agent / sous-agent / sous-sous-agent** = paliers progressifs sur la commission entreprise
+4. Le total des commissions agents ne dépasse jamais la commission entreprise
+5. La répartition agent/sous-agent/sous-sous-agent dépend du **niveau de l'agent qui a ramené le restaurant**
 
-## Recommandations next steps
-1. **Vérifier les paliers** dans `Paliers` - les valeurs par défaut sont génériques (15/12/10% entreprise...). Adaptez-les à vos vraies règles métier.
-2. **Créer vos vrais agents** depuis la page Agents (et supprimer les exemples Dupont/Martin/Bernard/Petit)
-3. **Saisir vos restaurants et marques virtuelles**
-4. **Faire un premier import CSV de test** avec une période courte pour vérifier le mapping et le calcul
-5. **Déployer en production** sur Cloudflare Pages
+---
 
-## Stack technique
-- **Backend** : Hono (TypeScript) sur Cloudflare Workers / Pages
-- **Database** : Cloudflare D1 (SQLite distribué)
-- **Frontend** : SPA Vanilla JS + TailwindCSS (CDN) + Chart.js + Axios + Font Awesome
+## 🚀 Utilisation
+
+### Premier démarrage (workflow recommandé)
+
+1. **Configurer les paliers** (page "Paliers")
+   - Vérifier/ajuster les pourcentages par défaut selon vos vraies règles
+
+2. **Créer les agents** (page "Agents")
+   - D'abord les agents N1, puis les sous-agents (en sélectionnant leur parent), puis les sous-sous-agents
+
+3. **Créer les restaurants** (page "Restaurants")
+   - Pour chaque snack, créer le restaurant et l'assigner à un agent
+   - Cliquer sur "Marques" pour ajouter les marques virtuelles (4, 5, 6...)
+
+4. **Importer les CSV Uber Eats** (page "Import CSV")
+   - Pour chaque marque virtuelle, importer le CSV exporté depuis Uber Eats
+   - L'app détecte automatiquement les colonnes
+   - Vérifier le mapping puis cliquer sur "Importer"
+
+5. **Voir les commissions** (page "Commissions")
+   - Sélectionner mois/année
+   - Onglet "Par restaurant" : voir le détail
+   - Onglet "Par agent" : voir le montant à payer à chaque agent
+   - Cliquer "Créer paiement" pour générer les fiches de paiement
+
+6. **Gérer les paiements** (page "Paiements")
+   - Marquer comme payé une fois le virement effectué
+   - Renseigner la référence et la date
+
+---
+
+## 🔧 Stack technique
+
+- **Backend** : [Hono](https://hono.dev/) (TypeScript, edge-first)
+- **Frontend** : Vanilla JS + Tailwind CSS (CDN) + Chart.js + Font Awesome
+- **Base de données** : Cloudflare D1 (SQLite distribué)
 - **Build** : Vite
-- **Déploiement** : Cloudflare Pages
+- **Hébergement** : Cloudflare Pages
 
-## Commandes utiles
+---
+
+## 📦 Scripts utiles
+
 ```bash
-# Build
+# Build production
 npm run build
 
-# Lancer en local (PM2)
+# Lancer en dev local (sandbox)
 pm2 start ecosystem.config.cjs
-pm2 logs webapp --nostream
 
-# Reset DB locale + seed
-rm -rf .wrangler/state/v3/d1
-npx wrangler d1 execute webapp-production --local --file=./migrations/0001_initial_schema.sql
+# Migration DB locale
+npm run db:migrate:local
+
+# Charger données initiales (paliers + agents exemples)
 npm run db:seed
+
+# Reset complet de la DB locale
+npm run db:reset
 
 # Console SQL locale
 npm run db:console:local
 
 # Déploiement Cloudflare Pages
-npm run deploy
+npm run deploy:prod
 ```
 
-## Statut
+---
+
+## ⏭️ Améliorations possibles (non implémentées)
+
+- 📤 **Export Excel/PDF** des fiches de commissions par agent
+- 🔐 **Authentification** (multi-utilisateurs : admin / chaque agent voit ses commissions)
+- 📊 **Rapports plus avancés** : comparaison périodes, projections
+- 📧 **Envoi automatique** des fiches de paie par email
+- 🎯 **Objectifs / bonus** par agent
+- 📅 **Calcul cumulatif annuel** (en plus du mensuel)
+- 🏆 **Classement / leaderboard** des agents
+- 📱 **App mobile** (PWA)
+- 🌐 **Multi-devise**
+- 🔄 **Synchronisation automatique** avec l'API Uber Eats (si disponible un jour)
+
+---
+
+## 📊 Statut du déploiement
+
 - **Plateforme** : Cloudflare Pages
-- **Statut** : ✅ Fonctionnel en local
-- **Tech** : Hono + TypeScript + Cloudflare D1 + TailwindCSS
-- **Date** : 2026-04-25
+- **Statut local** : ✅ Fonctionnel
+- **Statut production** : Non déployé (en attente de configuration)
+- **Dernière mise à jour** : Avril 2026
+
+---
+
+## 📝 Données d'exemple incluses
+
+Au démarrage avec `npm run db:seed`, l'application contient :
+- **Paliers par défaut** (à ajuster selon vos règles) :
+  - Entreprise : 15% (0-5k), 12% (5-10k), 10% (10-20k), 8% (20k+)
+  - Agent N1 : 20% (0-5k), 25% (5-10k), 30% (10k+)
+  - Sous-agent N2 : 10/12/15%
+  - Sous-sous-agent N3 : 5/7/10%
+- **4 agents exemples** : Jean Dupont (N1), Sophie Martin (N1), Karim Bernard (N2 sous Jean), Lina Petit (N3 sous Karim)
