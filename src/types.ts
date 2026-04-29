@@ -1,33 +1,43 @@
-// Types globaux de l'application
+// Types globaux DropEat™
 
 export type Bindings = {
   DB: D1Database
 }
 
-export interface Agent {
+export interface User {
   id: number
+  email: string
+  password_hash?: string
+  role: 'superadmin' | 'agent'
   nom: string
   prenom: string
-  email?: string
   telephone?: string
-  niveau: 1 | 2 | 3
-  parent_id?: number | null
+  niveau: number | null // 0=Agent, 1=Sous-agent N1, 2=Sous-agent N2
+  parent_id: number | null
   iban?: string
   actif: number
   notes?: string
-  created_at?: string
-  updated_at?: string
+  derniere_connexion?: string
 }
 
 export interface Restaurant {
   id: number
   nom: string
+  raison_sociale?: string
+  siret?: string
   adresse?: string
+  code_postal?: string
   ville?: string
+  pays?: string
   telephone?: string
   email?: string
-  agent_id?: number | null
+  contact_nom?: string
+  agent_id: number | null
+  rang_apport: number | null
+  is_portefeuille_proprietaire: number
+  tablette_sr_shop: number
   date_signature?: string
+  date_lancement?: string
   actif: number
   notes?: string
 }
@@ -37,6 +47,9 @@ export interface MarqueVirtuelle {
   restaurant_id: number
   nom: string
   uber_store_id?: string
+  plateforme: string
+  rang_creation: number | null
+  is_portefeuille_proprietaire: number
   date_lancement?: string
   actif: number
   notes?: string
@@ -44,12 +57,10 @@ export interface MarqueVirtuelle {
 
 export interface Palier {
   id: number
-  type: 'entreprise' | 'agent' | 'sous_agent' | 'sous_sous_agent'
-  base: 'ca' | 'commandes'
-  mode: 'mensuel' | 'cumulatif'
+  type: string
   seuil_min: number
   seuil_max: number | null
-  taux: number
+  montant_par_commande: number
   ordre: number
   actif: number
 }
@@ -63,6 +74,7 @@ export interface Commande {
   frais_uber: number
   montant_net: number
   statut: string
+  paye_integralement: number
 }
 
 export interface Paiement {

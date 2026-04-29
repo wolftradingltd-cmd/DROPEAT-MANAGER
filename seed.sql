@@ -1,43 +1,74 @@
 -- ============================================================
--- DONNÉES INITIALES - PALIERS DE COMMISSION PAR DÉFAUT
--- (à ajuster selon vos vraies règles métier)
+-- DONNÉES INITIALES DROPEAT™
+-- Mot de passe superadmin : "admin" (bcrypt)
+-- À CHANGER IMMÉDIATEMENT après première connexion
 -- ============================================================
 
--- Paliers ENTREPRISE (sur CA mensuel net du restaurant)
-INSERT INTO paliers_commissions (type, base, mode, seuil_min, seuil_max, taux, ordre) VALUES
-  ('entreprise', 'ca', 'mensuel', 0, 5000, 15, 1),
-  ('entreprise', 'ca', 'mensuel', 5000, 10000, 12, 2),
-  ('entreprise', 'ca', 'mensuel', 10000, 20000, 10, 3),
-  ('entreprise', 'ca', 'mensuel', 20000, NULL, 8, 4);
+-- Superadmin par défaut (email: admin@dropeat.io / mdp: admin123)
+-- Hash PBKDF2 (100000 itérations, SHA-256) - compatible Cloudflare Workers
+-- À CHANGER IMMÉDIATEMENT après première connexion
+INSERT OR IGNORE INTO users (email, password_hash, role, nom, prenom, niveau, parent_id) VALUES
+  ('admin@dropeat.io', 'pbkdf2$100000$a640f81e0a9074ee2191979a087fa7ec$fd1eb3ca87b5ba1f56c7e53e6df42ad91ed33adef19f4ddb012142379055eff3', 'superadmin', 'Admin', 'Super', NULL, NULL);
 
--- Paliers AGENT commercial (niveau 1) - sur la commission entreprise
-INSERT INTO paliers_commissions (type, base, mode, seuil_min, seuil_max, taux, ordre) VALUES
-  ('agent', 'ca', 'mensuel', 0, 5000, 20, 1),
-  ('agent', 'ca', 'mensuel', 5000, 10000, 25, 2),
-  ('agent', 'ca', 'mensuel', 10000, NULL, 30, 3);
+-- ============================================================
+-- PALIERS DE COMMISSION DROPEAT™
+-- ============================================================
 
--- Paliers SOUS-AGENT (niveau 2)
-INSERT INTO paliers_commissions (type, base, mode, seuil_min, seuil_max, taux, ordre) VALUES
-  ('sous_agent', 'ca', 'mensuel', 0, 5000, 10, 1),
-  ('sous_agent', 'ca', 'mensuel', 5000, 10000, 12, 2),
-  ('sous_agent', 'ca', 'mensuel', 10000, NULL, 15, 3);
+-- 1) FACTURATION RESTAURANT (sans tablette) - DropEat → Restaurant
+INSERT INTO paliers_commissions (type, seuil_min, seuil_max, montant_par_commande, ordre) VALUES
+  ('facturation_restaurant', 0, 30, 0.75, 1),
+  ('facturation_restaurant', 30, 60, 1.50, 2),
+  ('facturation_restaurant', 60, 120, 2.50, 3),
+  ('facturation_restaurant', 120, 200, 3.50, 4),
+  ('facturation_restaurant', 200, NULL, 5.00, 5);
 
--- Paliers SOUS-SOUS-AGENT (niveau 3)
-INSERT INTO paliers_commissions (type, base, mode, seuil_min, seuil_max, taux, ordre) VALUES
-  ('sous_sous_agent', 'ca', 'mensuel', 0, 5000, 5, 1),
-  ('sous_sous_agent', 'ca', 'mensuel', 5000, 10000, 7, 2),
-  ('sous_sous_agent', 'ca', 'mensuel', 10000, NULL, 10, 3);
+-- 2) FACTURATION RESTAURANT AVEC TABLETTE SR SHOP (+0.05€)
+INSERT INTO paliers_commissions (type, seuil_min, seuil_max, montant_par_commande, ordre) VALUES
+  ('facturation_restaurant_tablette', 0, 30, 0.80, 1),
+  ('facturation_restaurant_tablette', 30, 60, 1.55, 2),
+  ('facturation_restaurant_tablette', 60, 120, 2.55, 3),
+  ('facturation_restaurant_tablette', 120, 200, 3.55, 4),
+  ('facturation_restaurant_tablette', 200, NULL, 5.05, 5);
 
--- Configuration générale
-INSERT INTO config (cle, valeur, description) VALUES
+-- 3) AGENT COMMERCIAL STANDARD (sur ses propres clients hors Portefeuille)
+INSERT INTO paliers_commissions (type, seuil_min, seuil_max, montant_par_commande, ordre) VALUES
+  ('agent_standard', 0, 30, 0.30, 1),
+  ('agent_standard', 30, 60, 0.50, 2),
+  ('agent_standard', 60, 120, 0.75, 3),
+  ('agent_standard', 120, 200, 1.00, 4),
+  ('agent_standard', 200, NULL, 2.00, 5);
+
+-- 4) AGENT - PORTEFEUILLE PROPRIÉTAIRE (100% de la commission DropEat sur 5e client/marque)
+INSERT INTO paliers_commissions (type, seuil_min, seuil_max, montant_par_commande, ordre) VALUES
+  ('agent_portefeuille', 0, 30, 0.75, 1),
+  ('agent_portefeuille', 30, 60, 1.50, 2),
+  ('agent_portefeuille', 60, 120, 2.50, 3),
+  ('agent_portefeuille', 120, 200, 3.50, 4),
+  ('agent_portefeuille', 200, NULL, 5.00, 5);
+
+-- 5) COMMISSION SUR SOUS-AGENT NIVEAU 1 (perçue par l'agent parent)
+INSERT INTO paliers_commissions (type, seuil_min, seuil_max, montant_par_commande, ordre) VALUES
+  ('sous_agent_n1', 0, 30, 0.10, 1),
+  ('sous_agent_n1', 30, 60, 0.15, 2),
+  ('sous_agent_n1', 60, 120, 0.20, 3),
+  ('sous_agent_n1', 120, 200, 0.25, 4),
+  ('sous_agent_n1', 200, NULL, 0.35, 5);
+
+-- 6) COMMISSION SUR SOUS-AGENT NIVEAU 2 (perçue par le grand-parent)
+INSERT INTO paliers_commissions (type, seuil_min, seuil_max, montant_par_commande, ordre) VALUES
+  ('sous_agent_n2', 0, 30, 0.05, 1),
+  ('sous_agent_n2', 30, 60, 0.07, 2),
+  ('sous_agent_n2', 60, 120, 0.10, 3),
+  ('sous_agent_n2', 120, 200, 0.12, 4),
+  ('sous_agent_n2', 200, NULL, 0.18, 5);
+
+-- ============================================================
+-- CONFIGURATION
+-- ============================================================
+INSERT OR REPLACE INTO config (cle, valeur, description) VALUES
   ('devise', 'EUR', 'Devise utilisée'),
   ('symbole_devise', '€', 'Symbole de la devise'),
-  ('base_commission', 'montant_net', 'Champ utilisé pour calcul commissions: montant_net ou montant_brut'),
-  ('nom_societe', 'Ma Société', 'Nom de la société pour les rapports');
-
--- Exemples d'agents (pour démo - vous pouvez les supprimer)
-INSERT INTO agents (nom, prenom, email, telephone, niveau, parent_id) VALUES
-  ('Dupont', 'Jean', 'jean.dupont@example.com', '0612345678', 1, NULL),
-  ('Martin', 'Sophie', 'sophie.martin@example.com', '0623456789', 1, NULL),
-  ('Bernard', 'Karim', 'karim.bernard@example.com', '0634567890', 2, 1),
-  ('Petit', 'Lina', 'lina.petit@example.com', '0645678901', 3, 3);
+  ('nom_societe', 'DropEat™', 'Nom de la société'),
+  ('societe_juridique', 'SR SHOP LIMITED', 'Entité juridique'),
+  ('palier_portefeuille', '5', 'Tous les N restaurants/marques, le N-ième est 100% pour l''agent'),
+  ('app_version', '2.0', 'Version de l''application');
