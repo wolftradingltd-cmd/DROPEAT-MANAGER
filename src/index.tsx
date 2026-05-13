@@ -27,6 +27,7 @@ import agent from './routes/agent'
 import societes from './routes/societes'
 import factures from './routes/factures'
 import adminAgentsCrud from './routes/admin-agents-crud'
+import adminMarques from './routes/admin-marques'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -53,6 +54,7 @@ app.route('/api/admin/dashboard-v2', adminDashboardV2)
 app.route('/api/admin/tracabilite', adminTracabilite)
 app.route('/api/admin/comptes', adminComptes)
 app.route('/api/admin/agents-crud', adminAgentsCrud)
+app.route('/api/admin/marques', adminMarques)
 app.route('/api/shortener', adminShortener)
 
 // Profils société (tout user authentifié)

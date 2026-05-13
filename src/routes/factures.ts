@@ -14,6 +14,8 @@ import {
   mentionsLegales,
   buildLignesFactureAgent,
   buildLignesFactureRestaurant,
+  buildLignesFactureAgentResto,
+  listRestosPortefeuilleAvecCommandes,
   type ProfilSociete
 } from '../lib/factures'
 
@@ -237,6 +239,153 @@ app.post('/resto/create', async (c) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       factureId, ordre, l.libelle, l.description, 'facturation_resto',
+      l.marque_id || null, l.restaurant_id || null, null,
+      l.quantite, l.prix_unitaire, l.montant_ht, taux, tvaL, l.montant_ht + tvaL
+    ).run()
+  }
+
+  return c.json({ success: true, facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
+})
+
+// ============================================================
+// AGENT → RESTAURANT (portefeuille propriétaire 100%)
+// ============================================================
+// L'agent facture DIRECTEMENT le restaurant à 100% sur les commandes
+// des marques/restaurants en portefeuille (5e marque ou 5e restaurant).
+// DropEat ne touche rien sur ces commandes.
+// Pas de commission N+1/N+2 (déjà exclu côté calcul).
+// ============================================================
+
+// GET /api/factures/agent-resto/restos-eligibles?annee=&mois=
+// Liste les restaurants éligibles à facturation directe par l'agent connecté
+app.get('/agent-resto/restos-eligibles', async (c) => {
+  const user = c.get('user')
+  const annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+  const mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+  const restos = await listRestosPortefeuilleAvecCommandes(c.env.DB, user.id, annee, mois)
+  return c.json({ restos, annee, mois })
+})
+
+// POST /api/factures/agent-resto/preview
+// Body : { restaurant_id, annee, mois }
+app.post('/agent-resto/preview', async (c) => {
+  const user = c.get('user')
+  const { restaurant_id, annee, mois } = await c.req.json()
+  if (!restaurant_id || !annee || !mois) {
+    return c.json({ error: 'restaurant_id, annee, mois requis' }, 400)
+  }
+  // Vérifier que le restaurant appartient bien à l'agent
+  const resto = await c.env.DB.prepare(
+    'SELECT id, nom, agent_id FROM restaurants WHERE id = ?'
+  ).bind(restaurant_id).first() as any
+  if (!resto) return c.json({ error: 'Restaurant introuvable' }, 404)
+  if (resto.agent_id !== user.id && user.role !== 'superadmin') {
+    return c.json({ error: 'Ce restaurant ne vous appartient pas' }, 403)
+  }
+
+  const lignes = await buildLignesFactureAgentResto(c.env.DB, user.id, restaurant_id, annee, mois)
+  const total = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  return c.json({ lignes, total, nb_lignes: lignes.length, periode: { annee, mois }, restaurant: { id: resto.id, nom: resto.nom } })
+})
+
+// POST /api/factures/agent-resto/create
+// Body : { restaurant_id, annee, mois, notes? }
+app.post('/agent-resto/create', async (c) => {
+  const user = c.get('user')
+  const { restaurant_id, annee, mois, notes } = await c.req.json()
+  if (!restaurant_id || !annee || !mois) {
+    return c.json({ error: 'restaurant_id, annee, mois requis' }, 400)
+  }
+
+  // Vérif profil société rempli
+  const profil = await getProfil(c.env.DB, user.id)
+  if (!profil || !profil.raison_sociale || !profil.adresse_rue) {
+    return c.json({ error: 'Veuillez compléter votre profil société avant de créer une facture (Mon profil société)' }, 400)
+  }
+
+  // Récup resto + sécurité (ownership)
+  const resto = await c.env.DB.prepare(`
+    SELECT r.*, u.id as agent_id_real
+    FROM restaurants r LEFT JOIN users u ON r.agent_id = u.id
+    WHERE r.id = ?
+  `).bind(restaurant_id).first() as any
+  if (!resto) return c.json({ error: 'Restaurant introuvable' }, 404)
+  if (resto.agent_id_real !== user.id && user.role !== 'superadmin') {
+    return c.json({ error: 'Ce restaurant ne vous appartient pas' }, 403)
+  }
+
+  // Vérif : pas de facture existante
+  const existing = await c.env.DB.prepare(`
+    SELECT id, numero, statut FROM factures
+    WHERE emetteur_user_id = ? AND dest_restaurant_id = ?
+      AND periode_annee = ? AND periode_mois = ?
+      AND type = 'agent_to_resto'
+      AND statut NOT IN ('annulee','refusee')
+  `).bind(user.id, restaurant_id, annee, mois).first() as any
+  if (existing) {
+    return c.json({ error: `Une facture existe déjà pour cette période et ce restaurant : ${existing.numero} (${existing.statut})` }, 400)
+  }
+
+  const lignes = await buildLignesFactureAgentResto(c.env.DB, user.id, restaurant_id, annee, mois)
+  if (!lignes.length) return c.json({ error: 'Aucun encaissement direct (portefeuille) à facturer pour cette période' }, 400)
+  const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
+
+  // Snapshots
+  const emetteurSnap = JSON.stringify(profil)
+  const destSnap = JSON.stringify({
+    raison_sociale: resto.raison_sociale || resto.nom,
+    nom_commercial: resto.nom,
+    siret: resto.siret,
+    adresse_rue: resto.adresse,
+    code_postal: resto.code_postal,
+    ville: resto.ville,
+    pays: 'France',
+    email_facturation: resto.email,
+    telephone: resto.telephone
+  })
+
+  const prefixe = `AGR-${annee}-${String(mois).padStart(2, '0')}`
+  const numero = await getNextFactureNumero(c.env.DB, prefixe, 4)
+
+  const taux = profil.taux_tva || 0
+  const montantTVA = totalHT * (taux / 100)
+  const totalTTC = totalHT + montantTVA
+  const devise = (profil.pays || '').toLowerCase().includes('kingdom') ? 'GBP' : 'EUR'
+  const dateEmission = new Date()
+  const dateEcheance = addDays(dateEmission, 30)
+  const mentions = JSON.stringify(mentionsLegales(profil))
+
+  const r = await c.env.DB.prepare(`
+    INSERT INTO factures (
+      numero, type, emetteur_user_id, emetteur_snapshot,
+      dest_restaurant_id, dest_snapshot,
+      periode_annee, periode_mois,
+      date_emission, date_echeance,
+      montant_ht, montant_tva, taux_tva, montant_ttc, devise,
+      statut, mentions_legales, notes_internes
+    ) VALUES (?, 'agent_to_resto', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'brouillon', ?, ?)
+  `).bind(
+    numero, user.id, emetteurSnap,
+    restaurant_id, destSnap,
+    annee, mois,
+    fmtDate(dateEmission), fmtDate(dateEcheance),
+    totalHT, montantTVA, taux, totalTTC, devise,
+    mentions, notes || null
+  ).run()
+  const factureId = r.meta.last_row_id as number
+
+  let ordre = 0
+  for (const l of lignes) {
+    ordre++
+    const tvaL = l.montant_ht * (taux / 100)
+    await c.env.DB.prepare(`
+      INSERT INTO facture_lignes (
+        facture_id, ordre, libelle, description, categorie,
+        marque_id, restaurant_id, agent_concerne_id,
+        quantite, prix_unitaire, montant_ht, taux_tva, montant_tva, montant_ttc
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      factureId, ordre, l.libelle, l.description, l.categorie,
       l.marque_id || null, l.restaurant_id || null, null,
       l.quantite, l.prix_unitaire, l.montant_ht, taux, tvaL, l.montant_ht + tvaL
     ).run()

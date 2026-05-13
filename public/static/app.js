@@ -63,6 +63,16 @@ function confirmDialog(message, onConfirm) {
   m.el.querySelector('#confirmOK').onclick = async () => { m.close(); await onConfirm() }
 }
 
+// Variante avec titre + description (utilisée par PAGES['marques'])
+function confirmModal(title, description, onConfirm, opts = {}) {
+  const m = modal(title, `<p>${escapeHtml(description)}</p>`, {
+    footer: `<button class="btn btn-secondary" id="cmCancel">Annuler</button>
+             <button class="btn btn-danger" id="cmOK"><i class="fas fa-${opts.icon || 'trash'}"></i> ${escapeHtml(opts.confirmText || 'Confirmer')}</button>`
+  })
+  m.el.querySelector('#cmCancel').onclick = m.close
+  m.el.querySelector('#cmOK').onclick = async () => { m.close(); await onConfirm() }
+}
+
 // ===== Auth state =====
 let CURRENT_USER = null
 
@@ -2019,29 +2029,477 @@ PAGES['arborescence'] = async (c) => {
   renderTree(tree)
 }
 
-// --- Marques (vue globale) ---
+// ============================================================
+// --- Marques virtuelles (refonte complète, CRUD admin) ---
+// ============================================================
 PAGES['marques'] = async (c) => {
-  const { data } = await api.get('/admin/restaurants/marques/all')
+  // État local
+  const state = {
+    search: '',
+    restaurant_id: '',
+    agent_id: '',
+    portefeuille: '',     // '', '1', '0'
+    actif: '1',           // '' (tout), '1', '0'
+    selection: new Set()
+  }
+
   c.innerHTML = `
     <div class="page-header">
-      <div><h1>Marques virtuelles</h1><div class="subtitle">${data.marques.length} marques au total</div></div>
+      <div>
+        <h1><i class="fas fa-tags"></i> Marques virtuelles</h1>
+        <div class="subtitle">Gestion complète des marques — création, assignation, portefeuille propriétaire, suppression</div>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-secondary" id="btnReloadMarques"><i class="fas fa-sync"></i> Rafraîchir</button>
+        <button class="btn btn-primary" id="btnNewMarque"><i class="fas fa-plus"></i> Nouvelle marque</button>
+      </div>
     </div>
-    <div class="table-wrap">
+
+    <div id="mqStats" class="stats-grid" style="margin-bottom:1rem"></div>
+
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-title"><i class="fas fa-filter"></i> Filtres</div>
+      <div class="form-grid" style="grid-template-columns:2fr 1.5fr 1.5fr 1fr 1fr auto;gap:.6rem;align-items:end">
+        <div class="form-group">
+          <label style="font-size:.78rem">Recherche</label>
+          <input id="fSearch" placeholder="Nom marque, restaurant, Uber Store ID…" />
+        </div>
+        <div class="form-group">
+          <label style="font-size:.78rem">Restaurant</label>
+          <select id="fResto"><option value="">— Tous —</option></select>
+        </div>
+        <div class="form-group">
+          <label style="font-size:.78rem">Agent</label>
+          <select id="fAgent"><option value="">— Tous —</option></select>
+        </div>
+        <div class="form-group">
+          <label style="font-size:.78rem">Portefeuille</label>
+          <select id="fPortefeuille">
+            <option value="">— Tous —</option>
+            <option value="1">Portefeuille</option>
+            <option value="0">Standard</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label style="font-size:.78rem">Statut</label>
+          <select id="fActif">
+            <option value="1">Actives</option>
+            <option value="0">Inactives</option>
+            <option value="">Toutes</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary" id="btnClearFilters" title="Réinitialiser"><i class="fas fa-eraser"></i></button>
+      </div>
+    </div>
+
+    <div id="mqBulkBar" class="card" style="display:none;background:#eff6ff;border-left:3px solid var(--primary);margin-bottom:1rem">
+      <div style="display:flex;align-items:center;gap:.8rem">
+        <strong id="mqBulkCount" style="color:var(--primary)"></strong>
+        <button class="btn btn-sm btn-secondary" data-bulk="activate"><i class="fas fa-check"></i> Activer</button>
+        <button class="btn btn-sm btn-secondary" data-bulk="deactivate"><i class="fas fa-ban"></i> Désactiver</button>
+        <button class="btn btn-sm btn-link" id="mqClearSel" style="margin-left:auto">Annuler la sélection</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <i class="fas fa-list"></i> Liste des marques
+        <span id="mqCount" class="text-muted" style="font-weight:400;margin-left:.5rem"></span>
+      </div>
+      <div id="mqTableWrap" class="table-wrap">
+        <div class="text-muted" style="padding:1.5rem;text-align:center">
+          <i class="fas fa-circle-notch fa-spin"></i> Chargement…
+        </div>
+      </div>
+    </div>
+  `
+
+  // Chargement initial des restos pour le sélecteur + filtres + agents
+  let allRestos = []
+  let allAgents = []
+  try {
+    const [rR, rA] = await Promise.all([
+      api.get('/admin/marques/restos-disponibles'),
+      api.get('/admin/agents-crud/').catch(() => ({ data: { agents: [] } }))
+    ])
+    allRestos = rR.data.restos || []
+    allAgents = rA.data.agents || []
+  } catch (e) {
+    toast('Erreur de chargement des données', 'error')
+  }
+
+  const fResto = c.querySelector('#fResto')
+  for (const r of allRestos) {
+    const o = document.createElement('option')
+    o.value = r.id
+    o.textContent = r.nom + (r.ville ? ' — ' + r.ville : '') + (r.resto_portefeuille ? ' [P]' : '')
+    fResto.appendChild(o)
+  }
+  const fAgent = c.querySelector('#fAgent')
+  for (const a of allAgents) {
+    const o = document.createElement('option')
+    o.value = a.id
+    o.textContent = (a.prenom || '') + ' ' + (a.nom || '') + (typeof a.niveau === 'number' ? ` (N${a.niveau})` : '')
+    fAgent.appendChild(o)
+  }
+
+  // Listeners filtres (debounced search)
+  let searchTimer = null
+  c.querySelector('#fSearch').oninput = (e) => {
+    clearTimeout(searchTimer)
+    state.search = e.target.value
+    searchTimer = setTimeout(load, 300)
+  }
+  c.querySelector('#fResto').onchange = (e) => { state.restaurant_id = e.target.value; load() }
+  c.querySelector('#fAgent').onchange = (e) => { state.agent_id = e.target.value; load() }
+  c.querySelector('#fPortefeuille').onchange = (e) => { state.portefeuille = e.target.value; load() }
+  c.querySelector('#fActif').onchange = (e) => { state.actif = e.target.value; load() }
+  c.querySelector('#btnClearFilters').onclick = () => {
+    state.search = ''; state.restaurant_id = ''; state.agent_id = ''; state.portefeuille = ''; state.actif = '1'
+    c.querySelector('#fSearch').value = ''
+    c.querySelector('#fResto').value = ''
+    c.querySelector('#fAgent').value = ''
+    c.querySelector('#fPortefeuille').value = ''
+    c.querySelector('#fActif').value = '1'
+    load()
+  }
+  c.querySelector('#btnReloadMarques').onclick = load
+  c.querySelector('#btnNewMarque').onclick = () => marqueFormModal(null, allRestos, load)
+
+  async function load() {
+    const tw = c.querySelector('#mqTableWrap')
+    tw.innerHTML = '<div class="text-muted" style="padding:1.5rem;text-align:center"><i class="fas fa-circle-notch fa-spin"></i> Chargement…</div>'
+    const q = new URLSearchParams()
+    if (state.search) q.set('search', state.search)
+    if (state.restaurant_id) q.set('restaurant_id', state.restaurant_id)
+    if (state.agent_id) q.set('agent_id', state.agent_id)
+    if (state.portefeuille !== '') q.set('portefeuille', state.portefeuille)
+    if (state.actif !== '') q.set('actif', state.actif)
+    try {
+      const { data } = await api.get('/admin/marques?' + q.toString())
+      renderStats(data.stats)
+      renderTable(data.marques)
+    } catch (e) {
+      tw.innerHTML = '<div class="text-danger" style="padding:1rem">Erreur : ' + escapeHtml(e.response?.data?.error || e.message) + '</div>'
+    }
+  }
+
+  function renderStats(s) {
+    const sg = c.querySelector('#mqStats')
+    sg.innerHTML = `
+      <div class="stat-card"><div class="stat-label">Total marques</div><div class="stat-value">${s.total || 0}</div></div>
+      <div class="stat-card" style="border-left:3px solid #ea8a00"><div class="stat-label">Portefeuille (100%)</div><div class="stat-value" style="color:#ea8a00">${s.nb_portefeuille || 0}</div><div class="stat-extra">5e marque/resto</div></div>
+      <div class="stat-card" style="border-left:3px solid #06A05A"><div class="stat-label">Actives</div><div class="stat-value" style="color:#06A05A">${s.nb_actives || 0}</div></div>
+      <div class="stat-card" style="border-left:3px solid #94a3b8"><div class="stat-label">Inactives</div><div class="stat-value" style="color:#94a3b8">${s.nb_inactives || 0}</div></div>
+    `
+  }
+
+  function renderTable(marques) {
+    state.selection.clear()
+    updateBulkBar()
+    c.querySelector('#mqCount').textContent = `(${marques.length} résultat${marques.length > 1 ? 's' : ''})`
+    const tw = c.querySelector('#mqTableWrap')
+    if (!marques.length) {
+      tw.innerHTML = `
+        <div style="padding:2rem;text-align:center;color:#6b7280">
+          <i class="fas fa-tags" style="font-size:2.5rem;color:#cbd5e1;margin-bottom:.5rem"></i>
+          <p>Aucune marque ne correspond aux filtres.</p>
+          <button class="btn btn-primary btn-sm" id="emptyNewMarque"><i class="fas fa-plus"></i> Créer une marque</button>
+        </div>`
+      const b = tw.querySelector('#emptyNewMarque')
+      if (b) b.onclick = () => marqueFormModal(null, allRestos, load)
+      return
+    }
+    tw.innerHTML = `
       <table class="data-table">
-        <thead><tr><th>Marque</th><th>Restaurant</th><th>Agent</th><th>#</th><th>Plateforme</th><th>Uber ID</th></tr></thead>
-        <tbody>${data.marques.map(m => `
-          <tr>
-            <td><strong>${escapeHtml(m.nom)}</strong>
-              ${m.is_portefeuille_proprietaire ? '<span class="badge badge-gold">PORTEFEUILLE</span>' : ''}
+        <thead><tr>
+          <th style="width:32px"><input type="checkbox" id="mqSelAll" /></th>
+          <th>Marque</th>
+          <th>Restaurant</th>
+          <th>Agent</th>
+          <th class="text-right">Rang</th>
+          <th class="text-right">Cmd</th>
+          <th class="text-right">CA</th>
+          <th class="text-right">Commissions</th>
+          <th>Plateforme</th>
+          <th>Uber ID</th>
+          <th>Statut</th>
+          <th class="text-right">Actions</th>
+        </tr></thead>
+        <tbody>${marques.map(m => `
+          <tr data-id="${m.id}" ${!m.actif ? 'style="opacity:.55"' : ''}>
+            <td><input type="checkbox" class="mqSel" data-id="${m.id}" /></td>
+            <td>
+              <strong>${escapeHtml(m.nom)}</strong>
+              ${m.is_portefeuille_proprietaire ? '<span class="badge badge-gold" title="Marque en portefeuille propriétaire — agent facture le resto à 100%">PORTEFEUILLE</span>' : ''}
+              ${m.notes ? `<div class="text-muted" style="font-size:.72rem;margin-top:.15rem">${escapeHtml((m.notes||'').substring(0,60))}${(m.notes||'').length>60?'…':''}</div>` : ''}
             </td>
-            <td>${escapeHtml(m.restaurant_nom)}${m.resto_portefeuille ? ' <span class="badge badge-gold" style="font-size:.6rem">resto P</span>' : ''}</td>
-            <td>${m.agent_nom ? escapeHtml(m.agent_prenom + ' ' + m.agent_nom) : '<span class="text-muted">—</span>'}</td>
-            <td>${m.rang_creation || '-'}</td>
-            <td>${escapeHtml(m.plateforme)}</td>
-            <td><code>${escapeHtml(m.uber_store_id || '-')}</code></td>
+            <td>
+              ${escapeHtml(m.restaurant_nom)}
+              ${m.restaurant_ville ? `<div class="text-muted" style="font-size:.72rem">${escapeHtml(m.restaurant_ville)}</div>` : ''}
+              ${m.resto_portefeuille ? '<span class="badge badge-gold" style="font-size:.62rem">resto P</span>' : ''}
+            </td>
+            <td>${m.agent_nom ? `<strong>${escapeHtml(m.agent_prenom + ' ' + m.agent_nom)}</strong>${typeof m.agent_niveau==='number' ? `<div class="text-muted" style="font-size:.7rem">N${m.agent_niveau}</div>`:''}` : '<span class="text-muted">—</span>'}</td>
+            <td class="text-right">${m.rang_creation || '—'}</td>
+            <td class="text-right">${fmtNum(m.nb_commandes || 0)}</td>
+            <td class="text-right">${fmtEUR(m.ca_total || 0)}</td>
+            <td class="text-right text-success">${fmtEUR(m.commissions_total || 0)}</td>
+            <td><span class="badge badge-slate">${escapeHtml(m.plateforme || 'uber_eats')}</span></td>
+            <td><code style="font-size:.75rem">${escapeHtml(m.uber_store_id || '—')}</code></td>
+            <td>${m.actif ? '<span class="niveau-pill niveau-1">Active</span>' : '<span class="text-muted">Inactive</span>'}</td>
+            <td class="text-right" style="white-space:nowrap">
+              <button class="btn btn-sm btn-secondary" data-edit="${m.id}" title="Modifier"><i class="fas fa-pen"></i></button>
+              <button class="btn btn-sm btn-secondary" data-move="${m.id}" title="Déplacer vers un autre resto"><i class="fas fa-exchange-alt"></i></button>
+              <button class="btn btn-sm ${m.is_portefeuille_proprietaire ? 'btn-secondary' : 'btn-warning'}" data-pf="${m.id}" data-pfval="${m.is_portefeuille_proprietaire ? 0 : 1}" title="${m.is_portefeuille_proprietaire ? 'Retirer du portefeuille' : 'Marquer comme portefeuille'}">
+                <i class="fas fa-${m.is_portefeuille_proprietaire ? 'star-half-alt' : 'star'}"></i>
+              </button>
+              <button class="btn btn-sm btn-danger" data-del="${m.id}" data-nom="${escapeHtml(m.nom)}" data-cmd="${m.nb_commandes||0}" title="Supprimer"><i class="fas fa-trash"></i></button>
+            </td>
           </tr>`).join('')}</tbody>
-      </table>
-    </div>`
+      </table>`
+
+    // Sélection
+    c.querySelector('#mqSelAll').onchange = (e) => {
+      c.querySelectorAll('.mqSel').forEach(cb => {
+        cb.checked = e.target.checked
+        const id = parseInt(cb.dataset.id)
+        if (e.target.checked) state.selection.add(id)
+        else state.selection.delete(id)
+      })
+      updateBulkBar()
+    }
+    c.querySelectorAll('.mqSel').forEach(cb => {
+      cb.onchange = (e) => {
+        const id = parseInt(e.target.dataset.id)
+        if (e.target.checked) state.selection.add(id)
+        else state.selection.delete(id)
+        updateBulkBar()
+      }
+    })
+
+    // Actions
+    c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
+      const m = marques.find(x => x.id === parseInt(b.dataset.edit))
+      marqueFormModal(m, allRestos, load)
+    })
+    c.querySelectorAll('[data-move]').forEach(b => b.onclick = () => {
+      const m = marques.find(x => x.id === parseInt(b.dataset.move))
+      marqueMoveModal(m, allRestos, load)
+    })
+    c.querySelectorAll('[data-pf]').forEach(b => b.onclick = async () => {
+      const id = parseInt(b.dataset.pf)
+      const val = parseInt(b.dataset.pfval)
+      try {
+        await api.post(`/admin/marques/${id}/toggle-portefeuille`, { is_portefeuille: val })
+        toast(val ? 'Marque marquée en portefeuille' : 'Marque retirée du portefeuille')
+        load()
+      } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+    })
+    c.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+      const id = parseInt(b.dataset.del)
+      const nom = b.dataset.nom
+      const cmd = parseInt(b.dataset.cmd)
+      if (cmd > 0) {
+        confirmModal(
+          `Supprimer la marque "${nom}" ?`,
+          `Cette marque a ${cmd} commande(s). La suppression est définitive et supprimera aussi les commandes associées.`,
+          async () => {
+            try {
+              await api.delete(`/admin/marques/${id}?force=1`)
+              toast('Marque supprimée avec ses commandes')
+              load()
+            } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+          }
+        )
+      } else {
+        confirmModal(
+          `Supprimer la marque "${nom}" ?`,
+          'Action irréversible.',
+          async () => {
+            try {
+              await api.delete(`/admin/marques/${id}`)
+              toast('Marque supprimée')
+              load()
+            } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+          }
+        )
+      }
+    })
+  }
+
+  function updateBulkBar() {
+    const bar = c.querySelector('#mqBulkBar')
+    const n = state.selection.size
+    if (!n) { bar.style.display = 'none'; return }
+    bar.style.display = 'block'
+    c.querySelector('#mqBulkCount').textContent = `${n} marque${n > 1 ? 's' : ''} sélectionnée${n > 1 ? 's' : ''}`
+  }
+  c.querySelector('#mqClearSel').onclick = () => {
+    state.selection.clear()
+    c.querySelectorAll('.mqSel').forEach(cb => cb.checked = false)
+    const all = c.querySelector('#mqSelAll'); if (all) all.checked = false
+    updateBulkBar()
+  }
+  c.querySelectorAll('[data-bulk]').forEach(b => b.onclick = async () => {
+    const action = b.dataset.bulk
+    if (!state.selection.size) return
+    try {
+      await api.post('/admin/marques/bulk-toggle-actif', {
+        ids: Array.from(state.selection),
+        actif: action === 'activate' ? 1 : 0
+      })
+      toast(action === 'activate' ? 'Marques activées' : 'Marques désactivées')
+      load()
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  })
+
+  await load()
+}
+
+// ============================================================
+// Modal de création/édition d'une marque
+// ============================================================
+function marqueFormModal(marque, restos, onSuccess) {
+  const isEdit = !!marque
+  const m = modal(
+    `<i class="fas fa-${isEdit ? 'pen' : 'plus'}"></i> ${isEdit ? 'Modifier la marque' : 'Nouvelle marque virtuelle'}`,
+    `
+    <form id="mqForm">
+      <div class="form-grid">
+        ${isEdit ? '' : `
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Restaurant <span class="req">*</span></label>
+          <select id="mqResto" required>
+            <option value="">— Choisir un restaurant —</option>
+            ${restos.map(r => `<option value="${r.id}">${escapeHtml(r.nom)}${r.ville ? ' — ' + escapeHtml(r.ville) : ''}${r.agent_prenom ? ' · ' + escapeHtml(r.agent_prenom + ' ' + r.agent_nom) : ''}${r.resto_portefeuille ? ' [Portefeuille]' : ''}</option>`).join('')}
+          </select>
+        </div>`}
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Nom de la marque <span class="req">*</span></label>
+          <input id="mqNom" required value="${escapeHtml(marque?.nom || '')}" placeholder="Ex: Pizza Nostra, Burger Lab…" />
+        </div>
+        <div class="form-group">
+          <label>Plateforme</label>
+          <select id="mqPlat">
+            <option value="uber_eats" ${(!marque || marque.plateforme === 'uber_eats') ? 'selected' : ''}>Uber Eats</option>
+            <option value="deliveroo" ${marque?.plateforme === 'deliveroo' ? 'selected' : ''}>Deliveroo</option>
+            <option value="just_eat" ${marque?.plateforme === 'just_eat' ? 'selected' : ''}>Just Eat</option>
+            <option value="autre" ${marque?.plateforme === 'autre' ? 'selected' : ''}>Autre</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Uber Store ID / Réf plateforme</label>
+          <input id="mqUber" value="${escapeHtml(marque?.uber_store_id || '')}" placeholder="ex: 1a2b3c4d-5e6f" />
+        </div>
+        <div class="form-group">
+          <label>Date de lancement</label>
+          <input id="mqDate" type="date" value="${marque?.date_lancement ? marque.date_lancement.substring(0,10) : ''}" />
+        </div>
+        ${isEdit ? `
+        <div class="form-group">
+          <label>Statut</label>
+          <select id="mqActif">
+            <option value="1" ${marque.actif !== 0 ? 'selected' : ''}>Active</option>
+            <option value="0" ${marque.actif === 0 ? 'selected' : ''}>Inactive</option>
+          </select>
+        </div>` : `
+        <div class="form-group" style="display:flex;align-items:flex-end">
+          <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;background:#fef3c7;padding:.5rem .7rem;border-radius:6px;border:1px solid #fcd34d">
+            <input id="mqPf" type="checkbox" />
+            <span><i class="fas fa-star" style="color:#ea8a00"></i> Forcer en <strong>Portefeuille propriétaire</strong> (100% agent, pas de DropEat ni N+1/N+2)</span>
+          </label>
+        </div>`}
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Notes internes</label>
+          <textarea id="mqNotes" rows="2" placeholder="Notes facultatives…">${escapeHtml(marque?.notes || '')}</textarea>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> ${isEdit ? 'Enregistrer' : 'Créer la marque'}</button>
+      </div>
+    </form>
+    `
+  )
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelector('#mqForm').onsubmit = async (e) => {
+    e.preventDefault()
+    const payload = {
+      nom: m.el.querySelector('#mqNom').value.trim(),
+      uber_store_id: m.el.querySelector('#mqUber').value.trim() || null,
+      plateforme: m.el.querySelector('#mqPlat').value,
+      date_lancement: m.el.querySelector('#mqDate').value || null,
+      notes: m.el.querySelector('#mqNotes').value.trim() || null
+    }
+    if (isEdit) {
+      payload.actif = parseInt(m.el.querySelector('#mqActif').value)
+    } else {
+      payload.restaurant_id = parseInt(m.el.querySelector('#mqResto').value)
+      payload.is_portefeuille_proprietaire = m.el.querySelector('#mqPf').checked ? 1 : 0
+      if (!payload.restaurant_id) return toast('Sélectionnez un restaurant', 'error')
+    }
+    try {
+      if (isEdit) {
+        await api.put(`/admin/marques/${marque.id}`, payload)
+        toast('Marque mise à jour')
+      } else {
+        const r = await api.post('/admin/marques', payload)
+        let msg = 'Marque créée'
+        if (r.data.tranche?.attribution_100) {
+          msg += ` — 🎉 5e élément qualifiant ! Attribution 100% (tranche ${r.data.tranche.numero_tranche})`
+        }
+        toast(msg, 'success', 4000)
+      }
+      m.close()
+      onSuccess && onSuccess()
+    } catch (err) {
+      toast(err.response?.data?.error || 'Erreur', 'error')
+    }
+  }
+}
+
+// ============================================================
+// Modal de déplacement d'une marque vers un autre restaurant
+// ============================================================
+function marqueMoveModal(marque, restos, onSuccess) {
+  const others = restos.filter(r => r.id !== marque.restaurant_id)
+  const m = modal(
+    '<i class="fas fa-exchange-alt"></i> Déplacer la marque',
+    `
+    <div style="background:#fffbeb;padding:.7rem;border-radius:6px;border-left:3px solid #ea8a00;margin-bottom:1rem;font-size:.85rem">
+      <strong>⚠ Attention :</strong> déplacer la marque <strong>"${escapeHtml(marque.nom)}"</strong>
+      changera son rattachement de restaurant et donc d'agent. Toutes les commandes existantes resteront liées à la marque.
+    </div>
+    <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Restaurant actuel</label>
+        <input value="${escapeHtml(marque.restaurant_nom)}" readonly style="background:#f3f4f6" />
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Nouveau restaurant <span class="req">*</span></label>
+        <select id="mvResto" required>
+          <option value="">— Choisir —</option>
+          ${others.map(r => `<option value="${r.id}">${escapeHtml(r.nom)}${r.ville ? ' — ' + escapeHtml(r.ville) : ''}${r.agent_prenom ? ' · ' + escapeHtml(r.agent_prenom + ' ' + r.agent_nom) : ''}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+      <button type="button" class="btn btn-primary" id="btnMove"><i class="fas fa-exchange-alt"></i> Déplacer</button>
+    </div>
+    `
+  )
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelector('#btnMove').onclick = async () => {
+    const newId = parseInt(m.el.querySelector('#mvResto').value)
+    if (!newId) return toast('Sélectionnez un restaurant', 'error')
+    try {
+      await api.post(`/admin/marques/${marque.id}/move`, { restaurant_id: newId })
+      toast('Marque déplacée')
+      m.close()
+      onSuccess && onSuccess()
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
 }
 
 // --- Imports CSV ---
@@ -4451,19 +4909,39 @@ async function factureViewerModal(id) {
 // === FACTURES AGENT (création + liste) ======================
 // ============================================================
 PAGES['a-factures'] = async (c) => {
-  const { data } = await api.get('/factures?type=agent_to_dropeat')
-  const factures = data.factures || []
+  const [aDr, aRe] = await Promise.all([
+    api.get('/factures?type=agent_to_dropeat'),
+    api.get('/factures?type=agent_to_resto').catch(() => ({ data: { factures: [] } }))
+  ])
+  const facturesDr = aDr.data.factures || []
+  const facturesRe = aRe.data.factures || []
+
   c.innerHTML = `
     <div class="page-header">
       <div><h1><i class="fas fa-file-invoice-dollar"></i> Mes factures</h1>
-        <div class="subtitle">${factures.length} facture${factures.length > 1 ? 's' : ''} — vous facturez DropEat vos commissions (propres + portefeuille + N+1 + N+2)</div></div>
-      <button class="btn btn-primary" id="newFacture"><i class="fas fa-plus"></i> Nouvelle facture</button>
+        <div class="subtitle">Vos commissions DropEat + vos facturations directes (portefeuille 100%)</div></div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-primary" id="newFacture"><i class="fas fa-plus"></i> Facture commissions (→ DropEat)</button>
+        <button class="btn btn-warning" id="newFactureResto"><i class="fas fa-star"></i> Facture portefeuille (→ restaurant)</button>
+      </div>
     </div>
-    <div class="card">
-      <div class="card-title"><i class="fas fa-list"></i> Historique de mes factures</div>
+
+    <div class="card" style="background:#fffbeb;border-left:3px solid #ea8a00;margin-bottom:1rem">
+      <div style="display:flex;align-items:start;gap:.6rem;font-size:.88rem">
+        <i class="fas fa-circle-info" style="color:#ea8a00;font-size:1.1rem;margin-top:.15rem"></i>
+        <div>
+          <strong>Deux types de facturation :</strong><br>
+          <span style="color:#475569"><strong>1. Vers DropEat</strong> — vos commissions propres + N+1 + N+2 sur toutes vos ventes <em>hors portefeuille</em>.</span><br>
+          <span style="color:#475569"><strong>2. Vers le restaurant (Portefeuille 100%)</strong> — sur la 5e marque ou le 5e restaurant en portefeuille propriétaire, vous facturez <strong>directement</strong> le restaurant à 100% (DropEat ne touche rien, aucune remontée N+1/N+2).</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-title"><i class="fas fa-building"></i> Factures de commissions (→ DropEat) — ${facturesDr.length}</div>
       <div class="table-wrap"><table class="data-table">
-        <thead><tr><th>Numéro</th><th>Période</th><th>Émission</th><th>Échéance</th><th class="text-right">Montant HT</th><th class="text-right">TTC</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
-        <tbody>${factures.length ? factures.map(f => `<tr>
+        <thead><tr><th>Numéro</th><th>Période</th><th>Émission</th><th>Échéance</th><th class="text-right">HT</th><th class="text-right">TTC</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>${facturesDr.length ? facturesDr.map(f => `<tr>
           <td><strong style="font-family:monospace">${escapeHtml(f.numero)}</strong></td>
           <td>${monthsFR[f.periode_mois-1]} ${f.periode_annee}</td>
           <td>${fmtDate(f.date_emission)}</td>
@@ -4476,14 +4954,43 @@ PAGES['a-factures'] = async (c) => {
             ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-primary" data-send="${f.id}" title="Envoyer pour validation"><i class="fas fa-paper-plane"></i></button>` : ''}
             ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-danger" data-del="${f.id}" title="Supprimer"><i class="fas fa-trash"></i></button>` : ''}
           </td>
-        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucune facture pour le moment. Cliquez sur « Nouvelle facture ».</td></tr>'}</tbody>
+        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucune facture. Cliquez sur « Facture commissions ».</td></tr>'}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card" style="border-left:3px solid #ea8a00">
+      <div class="card-title"><i class="fas fa-star" style="color:#ea8a00"></i> Factures directes portefeuille 100% (→ restaurant) — ${facturesRe.length}</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Numéro</th><th>Restaurant</th><th>Période</th><th>Émission</th><th>Échéance</th><th class="text-right">HT</th><th class="text-right">TTC</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>${facturesRe.length ? facturesRe.map(f => {
+          let destNom = '—'
+          try {
+            const ds = typeof f.dest_snapshot === 'string' ? JSON.parse(f.dest_snapshot) : f.dest_snapshot
+            destNom = ds?.nom_commercial || ds?.raison_sociale || '—'
+          } catch {}
+          return `<tr>
+          <td><strong style="font-family:monospace">${escapeHtml(f.numero)}</strong></td>
+          <td>${escapeHtml(destNom)}</td>
+          <td>${monthsFR[f.periode_mois-1]} ${f.periode_annee}</td>
+          <td>${fmtDate(f.date_emission)}</td>
+          <td>${fmtDate(f.date_echeance)}</td>
+          <td class="text-right">${fmtEUR(f.montant_ht)}</td>
+          <td class="text-right"><strong>${fmtEUR(f.montant_ttc)}</strong></td>
+          <td>${factureStatutBadge(f.statut)}</td>
+          <td class="text-right" style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary" data-view="${f.id}" title="Voir / PDF"><i class="fas fa-eye"></i></button>
+            ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-primary" data-send="${f.id}" title="Envoyer au restaurant"><i class="fas fa-paper-plane"></i></button>` : ''}
+            ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-danger" data-del="${f.id}" title="Supprimer"><i class="fas fa-trash"></i></button>` : ''}
+          </td>
+        </tr>`}).join('') : '<tr><td colspan="9" class="text-center text-muted">Aucune facture directe. Si vous avez des marques/restaurants en portefeuille avec des ventes, cliquez sur « Facture portefeuille ».</td></tr>'}</tbody>
       </table></div>
     </div>
   `
   c.querySelector('#newFacture').onclick = () => factureCreateAgentModal(() => navigate('a-factures'))
+  c.querySelector('#newFactureResto').onclick = () => factureCreateAgentRestoModal(() => navigate('a-factures'))
   c.querySelectorAll('[data-view]').forEach(b => b.onclick = () => factureViewerModal(b.dataset.view))
   c.querySelectorAll('[data-send]').forEach(b => b.onclick = () => confirmDialog(
-    'Envoyer cette facture au super-admin pour validation ? Vous ne pourrez plus la modifier.',
+    'Envoyer cette facture ? Vous ne pourrez plus la modifier.',
     async () => {
       try { await api.post('/factures/' + b.dataset.send + '/envoyer'); toast('Facture envoyée'); navigate('a-factures') }
       catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
@@ -4496,6 +5003,104 @@ PAGES['a-factures'] = async (c) => {
       catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
     }
   ))
+}
+
+// ============================================================
+// Modal de création d'une facture AGENT → RESTAURANT (portefeuille 100%)
+// ============================================================
+function factureCreateAgentRestoModal(onSuccess) {
+  const now = new Date()
+  const annee = now.getFullYear()
+  const moisCur = now.getMonth() + 1
+  const m = modal('<i class="fas fa-star" style="color:#ea8a00"></i> Facture directe portefeuille (→ restaurant)', `
+    <div style="background:#fffbeb;border-left:3px solid #ea8a00;padding:.7rem;border-radius:6px;margin-bottom:1rem;font-size:.85rem">
+      <strong>Règle d'or :</strong> sur la 5e marque ou le 5e restaurant en <strong>portefeuille propriétaire</strong>,
+      vous facturez <strong>directement le restaurant à 100%</strong>. DropEat ne touche rien, aucune commission N+1/N+2.
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Année</label><input id="frAnnee" type="number" value="${annee}" min="2024" max="2030"/></div>
+      <div class="form-group"><label>Mois</label>
+        <select id="frMois">${monthsFR.map((mo, i) => `<option value="${i+1}" ${i+1===moisCur?'selected':''}>${mo}</option>`).join('')}</select>
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Restaurant éligible <span class="req">*</span></label>
+        <select id="frResto" required>
+          <option value="">— Sélectionnez d'abord la période puis cliquez « Charger restos éligibles » —</option>
+        </select>
+        <small class="text-muted">Seuls les restaurants ayant au moins une marque/restaurant en portefeuille avec des commandes sur la période sont listés.</small>
+      </div>
+    </div>
+    <div style="display:flex;gap:.5rem;margin:.6rem 0">
+      <button type="button" class="btn btn-secondary btn-sm" id="frLoadRestos"><i class="fas fa-sync"></i> Charger restos éligibles</button>
+      <button type="button" class="btn btn-info btn-sm" id="frPreviewBtn"><i class="fas fa-eye"></i> Aperçu</button>
+    </div>
+    <div id="frPreview" style="margin:1rem 0;padding:1rem;background:#f9fafb;border-radius:6px;display:none"></div>
+    <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="frNotes" rows="2"></textarea></div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+      <button type="button" class="btn btn-primary" id="frCreate"><i class="fas fa-file-invoice"></i> Créer brouillon</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+
+  async function loadRestos() {
+    const a = parseInt(m.el.querySelector('#frAnnee').value)
+    const mo = parseInt(m.el.querySelector('#frMois').value)
+    try {
+      const { data } = await api.get(`/factures/agent-resto/restos-eligibles?annee=${a}&mois=${mo}`)
+      const sel = m.el.querySelector('#frResto')
+      sel.innerHTML = '<option value="">— Choisir —</option>' + (data.restos || []).map(r =>
+        `<option value="${r.restaurant_id}">${escapeHtml(r.restaurant_nom)} — ${r.nb_commandes} cmd · CA ${fmtEUR(r.ca)} · à facturer ${fmtEUR(r.montant_facturable)}${r.resto_pf ? ' [Resto P]' : ''}${r.nb_marques_pf ? ` [${r.nb_marques_pf} marque(s) P]` : ''}</option>`
+      ).join('')
+      if (!data.restos?.length) {
+        toast('Aucun restaurant éligible sur cette période (pas de marque/resto en portefeuille avec ventes)', 'error', 4500)
+      } else {
+        toast(`${data.restos.length} restaurant(s) éligible(s)`)
+      }
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+  m.el.querySelector('#frLoadRestos').onclick = loadRestos
+  m.el.querySelector('#frAnnee').onchange = loadRestos
+  m.el.querySelector('#frMois').onchange = loadRestos
+  // Auto-load au démarrage
+  loadRestos()
+
+  m.el.querySelector('#frPreviewBtn').onclick = async () => {
+    const a = parseInt(m.el.querySelector('#frAnnee').value)
+    const mo = parseInt(m.el.querySelector('#frMois').value)
+    const rid = parseInt(m.el.querySelector('#frResto').value)
+    if (!rid) return toast('Sélectionnez un restaurant', 'error')
+    try {
+      const { data } = await api.post('/factures/agent-resto/preview', { restaurant_id: rid, annee: a, mois: mo })
+      const box = m.el.querySelector('#frPreview')
+      box.style.display = 'block'
+      box.innerHTML = data.lignes.length ? `
+        <strong><i class="fas fa-star" style="color:#ea8a00"></i> Aperçu — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
+        <div class="text-muted" style="font-size:.78rem;margin:.3rem 0 .5rem 0">Restaurant : <strong>${escapeHtml(data.restaurant.nom)}</strong></div>
+        <table class="data-table" style="font-size:.8rem">
+          <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">HT</th></tr></thead>
+          <tbody>${data.lignes.map(l => `<tr>
+            <td>${escapeHtml(l.libelle)}<br><small class="text-muted">${escapeHtml(l.description)}</small></td>
+            <td class="text-right">${fmtNum(l.quantite)}</td>
+            <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
+          </tr>`).join('')}</tbody>
+        </table>
+      ` : '<div class="text-muted">Aucun encaissement portefeuille à facturer pour cette période.</div>'
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+  m.el.querySelector('#frCreate').onclick = async () => {
+    const a = parseInt(m.el.querySelector('#frAnnee').value)
+    const mo = parseInt(m.el.querySelector('#frMois').value)
+    const rid = parseInt(m.el.querySelector('#frResto').value)
+    const notes = m.el.querySelector('#frNotes').value
+    if (!rid) return toast('Sélectionnez un restaurant', 'error')
+    try {
+      const { data } = await api.post('/factures/agent-resto/create', { restaurant_id: rid, annee: a, mois: mo, notes })
+      toast('Facture créée : ' + data.numero)
+      m.close()
+      onSuccess && onSuccess()
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
 }
 
 function factureCreateAgentModal(onSuccess) {
