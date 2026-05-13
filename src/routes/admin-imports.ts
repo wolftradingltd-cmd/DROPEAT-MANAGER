@@ -231,25 +231,66 @@ app.post('/', async (c) => {
   })
 })
 
-// GET /api/imports - Historique
+// GET /api/imports - Historique ENRICHI avec agrégats financiers
+// Pour chaque import : nb_commandes réel, CA brut resto, CA DropEat brut (montant_facture_resto),
+// commissions agent (propre + portefeuille), commissions N+1, commissions N+2,
+// marge nette DropEat = CA DropEat - (toutes commissions hors portefeuille — la marge
+// est déjà 0 pour les commandes portefeuille car DropEat ne facture pas)
 app.get('/', async (c) => {
   const user = c.get('user')
 
   let query = `
-    SELECT i.*, m.nom as marque_nom, r.nom as restaurant_nom, r.agent_id,
-           u.nom as uploader_nom, u.prenom as uploader_prenom
+    SELECT
+      i.*,
+      m.nom as marque_nom,
+      m.is_portefeuille_proprietaire as marque_pf,
+      r.nom as restaurant_nom,
+      r.agent_id,
+      r.is_portefeuille_proprietaire as resto_pf,
+      u.nom as uploader_nom, u.prenom as uploader_prenom,
+      ag.nom as agent_nom, ag.prenom as agent_prenom,
+      -- Agrégats financiers (issus de commandes liées par import_id)
+      COALESCE(stats.nb_cmd_reel, 0) as nb_commandes_reel,
+      COALESCE(stats.ca_brut, 0) as ca_brut,
+      COALESCE(stats.ca_dropeat_brut, 0) as ca_dropeat_brut,
+      COALESCE(stats.comm_propre, 0) as commissions_propre,
+      COALESCE(stats.comm_portefeuille, 0) as commissions_portefeuille,
+      COALESCE(stats.comm_n1, 0) as commissions_n1,
+      COALESCE(stats.comm_n2, 0) as commissions_n2,
+      COALESCE(stats.ca_dropeat_brut, 0)
+        - COALESCE(stats.comm_propre, 0)
+        - COALESCE(stats.comm_n1, 0)
+        - COALESCE(stats.comm_n2, 0) as marge_dropeat_nette,
+      COALESCE(stats.comm_propre, 0)
+        + COALESCE(stats.comm_portefeuille, 0)
+        + COALESCE(stats.comm_n1, 0)
+        + COALESCE(stats.comm_n2, 0) as commissions_total
     FROM imports_csv i
     JOIN marques_virtuelles m ON i.marque_id = m.id
     JOIN restaurants r ON m.restaurant_id = r.id
     LEFT JOIN users u ON i.uploader_user_id = u.id
+    LEFT JOIN users ag ON r.agent_id = ag.id
+    LEFT JOIN (
+      SELECT
+        c.import_id,
+        COUNT(c.id) as nb_cmd_reel,
+        SUM(COALESCE(c.montant_brut, 0)) as ca_brut,
+        SUM(COALESCE(c.montant_facture_resto, 0)) as ca_dropeat_brut,
+        SUM(COALESCE(c.commission_agent_montant, 0)) as comm_propre,
+        SUM(COALESCE(c.commission_portefeuille_montant, 0)) as comm_portefeuille,
+        SUM(COALESCE(c.commission_n1_montant, 0)) as comm_n1,
+        SUM(COALESCE(c.commission_n2_montant, 0)) as comm_n2
+      FROM commandes c
+      WHERE c.statut != 'annulee' AND c.import_id IS NOT NULL
+      GROUP BY c.import_id
+    ) stats ON stats.import_id = i.id
   `
   const params: any[] = []
 
   if (user.role !== 'superadmin') {
-    // Agent : voir uniquement les imports de sa branche
     const branchIds = await getBranchAgentIds(c.env.DB, user.id)
     if (branchIds.length === 0) {
-      return c.json({ imports: [] })
+      return c.json({ imports: [], totaux: { nb_imports: 0, ca_brut: 0, ca_dropeat_brut: 0, commissions_total: 0, marge_dropeat_nette: 0 } })
     }
     query += ` WHERE r.agent_id IN (${branchIds.map(() => '?').join(',')})`
     params.push(...branchIds)
@@ -258,8 +299,185 @@ app.get('/', async (c) => {
   query += ` ORDER BY i.created_at DESC LIMIT 200`
 
   const stmt = c.env.DB.prepare(query)
-  const { results } = await (params.length ? stmt.bind(...params) : stmt).all()
-  return c.json({ imports: results })
+  const { results } = await (params.length ? stmt.bind(...params) : stmt).all() as any
+
+  // Totaux globaux (somme des lignes visibles)
+  let nb_imports = 0, ca_brut = 0, ca_dropeat_brut = 0
+  let comm_propre = 0, comm_portefeuille = 0, comm_n1 = 0, comm_n2 = 0
+  let marge_dropeat_nette = 0
+  for (const r of results as any[]) {
+    nb_imports++
+    ca_brut += +r.ca_brut || 0
+    ca_dropeat_brut += +r.ca_dropeat_brut || 0
+    comm_propre += +r.commissions_propre || 0
+    comm_portefeuille += +r.commissions_portefeuille || 0
+    comm_n1 += +r.commissions_n1 || 0
+    comm_n2 += +r.commissions_n2 || 0
+    marge_dropeat_nette += +r.marge_dropeat_nette || 0
+  }
+
+  return c.json({
+    imports: results,
+    totaux: {
+      nb_imports,
+      ca_brut,
+      ca_dropeat_brut,
+      commissions_propre: comm_propre,
+      commissions_portefeuille: comm_portefeuille,
+      commissions_n1: comm_n1,
+      commissions_n2: comm_n2,
+      commissions_total: comm_propre + comm_portefeuille + comm_n1 + comm_n2,
+      marge_dropeat_nette
+    }
+  })
+})
+
+// GET /api/imports/:id/details — Détail commissions d'un import
+// Retourne :
+//   - import (toutes les infos + agent owner)
+//   - breakdown par_marque (CA, commissions, marge)
+//   - breakdown par_agent (N0/N+1/N+2) : qui touche quoi sur cet import
+//   - commandes (échantillon)
+app.get('/:id/details', async (c) => {
+  const user = c.get('user')
+  const id = c.req.param('id')
+
+  // Récup import + sécurité branche
+  const imp = await c.env.DB.prepare(`
+    SELECT i.*, m.nom as marque_nom, m.id as marque_id,
+           m.is_portefeuille_proprietaire as marque_pf,
+           r.nom as restaurant_nom, r.id as restaurant_id, r.agent_id,
+           r.is_portefeuille_proprietaire as resto_pf,
+           ag.nom as agent_nom, ag.prenom as agent_prenom, ag.email as agent_email,
+           u.nom as uploader_nom, u.prenom as uploader_prenom
+    FROM imports_csv i
+    JOIN marques_virtuelles m ON i.marque_id = m.id
+    JOIN restaurants r ON m.restaurant_id = r.id
+    LEFT JOIN users ag ON r.agent_id = ag.id
+    LEFT JOIN users u ON i.uploader_user_id = u.id
+    WHERE i.id = ?
+  `).bind(id).first() as any
+  if (!imp) return c.json({ error: 'Import introuvable' }, 404)
+
+  if (user.role !== 'superadmin') {
+    const branchIds = await getBranchAgentIds(c.env.DB, user.id)
+    if (!branchIds.includes(imp.agent_id)) {
+      return c.json({ error: 'Accès refusé' }, 403)
+    }
+  }
+
+  // Agrégats globaux de l'import
+  const totaux = await c.env.DB.prepare(`
+    SELECT
+      COUNT(c.id) as nb_commandes,
+      COALESCE(SUM(c.montant_brut), 0) as ca_brut,
+      COALESCE(SUM(c.montant_facture_resto), 0) as ca_dropeat_brut,
+      COALESCE(SUM(c.commission_agent_montant), 0) as comm_propre,
+      COALESCE(SUM(c.commission_portefeuille_montant), 0) as comm_portefeuille,
+      COALESCE(SUM(c.commission_n1_montant), 0) as comm_n1,
+      COALESCE(SUM(c.commission_n2_montant), 0) as comm_n2
+    FROM commandes c
+    WHERE c.import_id = ? AND c.statut != 'annulee'
+  `).bind(id).first() as any
+
+  const marge_dropeat_nette = (totaux?.ca_dropeat_brut || 0)
+    - (totaux?.comm_propre || 0)
+    - (totaux?.comm_n1 || 0)
+    - (totaux?.comm_n2 || 0)
+
+  // Breakdown par marque
+  const { results: par_marque } = await c.env.DB.prepare(`
+    SELECT
+      m.id as marque_id, m.nom as marque_nom,
+      COALESCE(m.is_portefeuille_proprietaire, 0) as marque_pf,
+      COUNT(c.id) as nb_commandes,
+      COALESCE(SUM(c.montant_brut), 0) as ca_brut,
+      COALESCE(SUM(c.montant_facture_resto), 0) as ca_dropeat_brut,
+      COALESCE(SUM(c.commission_agent_montant), 0) as comm_propre,
+      COALESCE(SUM(c.commission_portefeuille_montant), 0) as comm_portefeuille,
+      COALESCE(SUM(c.commission_n1_montant), 0) as comm_n1,
+      COALESCE(SUM(c.commission_n2_montant), 0) as comm_n2
+    FROM commandes c
+    JOIN marques_virtuelles m ON c.marque_id = m.id
+    WHERE c.import_id = ? AND c.statut != 'annulee'
+    GROUP BY m.id
+    ORDER BY ca_brut DESC
+  `).bind(id).all() as any
+
+  // Breakdown par agent (N0 = agent du resto, puis N+1, N+2)
+  // Pour cet import, on a UN seul resto donc UN seul N0 mais on calcule via la chaîne MLM
+  let par_agent: any[] = []
+  if (imp.agent_id) {
+    const n0 = await c.env.DB.prepare('SELECT id, nom, prenom, parent_id FROM users WHERE id = ?').bind(imp.agent_id).first() as any
+    if (n0) {
+      par_agent.push({
+        agent_id: n0.id, nom: n0.nom, prenom: n0.prenom, niveau: 'N0',
+        commission_propre: totaux?.comm_propre || 0,
+        commission_portefeuille: totaux?.comm_portefeuille || 0,
+        commission_n1: 0, commission_n2: 0,
+        total: (totaux?.comm_propre || 0) + (totaux?.comm_portefeuille || 0)
+      })
+      // N+1 = parent de N0
+      if (n0.parent_id) {
+        const n1 = await c.env.DB.prepare('SELECT id, nom, prenom, parent_id FROM users WHERE id = ?').bind(n0.parent_id).first() as any
+        if (n1) {
+          par_agent.push({
+            agent_id: n1.id, nom: n1.nom, prenom: n1.prenom, niveau: 'N+1',
+            commission_propre: 0, commission_portefeuille: 0,
+            commission_n1: totaux?.comm_n1 || 0, commission_n2: 0,
+            total: totaux?.comm_n1 || 0
+          })
+          // N+2 = parent de N+1
+          if (n1.parent_id) {
+            const n2 = await c.env.DB.prepare('SELECT id, nom, prenom FROM users WHERE id = ?').bind(n1.parent_id).first() as any
+            if (n2) {
+              par_agent.push({
+                agent_id: n2.id, nom: n2.nom, prenom: n2.prenom, niveau: 'N+2',
+                commission_propre: 0, commission_portefeuille: 0,
+                commission_n1: 0, commission_n2: totaux?.comm_n2 || 0,
+                total: totaux?.comm_n2 || 0
+              })
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // DropEat lui-même (marge nette)
+  par_agent.push({
+    agent_id: null, nom: 'DROPEAT', prenom: '', niveau: 'DROPEAT',
+    commission_propre: 0, commission_portefeuille: 0, commission_n1: 0, commission_n2: 0,
+    total: marge_dropeat_nette
+  })
+
+  // Échantillon de commandes (50 max)
+  const { results: commandes } = await c.env.DB.prepare(`
+    SELECT
+      c.id, c.uber_order_id, c.uber_uuid, c.date_commande, c.statut,
+      c.montant_brut, c.frais_uber, c.montant_net, c.montant_facture_resto,
+      c.commission_agent_montant, c.commission_portefeuille_montant,
+      c.commission_n1_montant, c.commission_n2_montant,
+      m.nom as marque_nom
+    FROM commandes c
+    JOIN marques_virtuelles m ON c.marque_id = m.id
+    WHERE c.import_id = ? AND c.statut != 'annulee'
+    ORDER BY c.date_commande DESC
+    LIMIT 50
+  `).bind(id).all() as any
+
+  return c.json({
+    import: imp,
+    totaux: {
+      ...(totaux || {}),
+      marge_dropeat_nette,
+      commissions_total: (totaux?.comm_propre || 0) + (totaux?.comm_portefeuille || 0)
+                       + (totaux?.comm_n1 || 0) + (totaux?.comm_n2 || 0)
+    },
+    par_marque,
+    par_agent,
+    commandes
+  })
 })
 
 // DELETE /api/imports/:id

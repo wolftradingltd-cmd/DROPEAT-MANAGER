@@ -2549,27 +2549,73 @@ async function loadImportsPage(c, baseEndpoint) {
       </div>
       <div id="previewBox"></div>
     </div>
+    ${imp.data.totaux && imp.data.imports.length ? `
+      <div class="stats-grid mb-3" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.8rem;margin-bottom:1rem">
+        <div class="stat-card" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:.9rem">
+          <div class="text-muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em">CA brut restaurants</div>
+          <div style="font-size:1.4rem;font-weight:700;color:#0f172a">${fmtEUR(imp.data.totaux.ca_brut)}</div>
+          <div class="text-muted" style="font-size:.78rem">${imp.data.totaux.nb_imports} import(s)</div>
+        </div>
+        <div class="stat-card" style="background:#eef6ff;border:1px solid #c7dffd;border-radius:8px;padding:.9rem">
+          <div class="text-muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em">CA DropEat brut</div>
+          <div style="font-size:1.4rem;font-weight:700;color:#1e40af">${fmtEUR(imp.data.totaux.ca_dropeat_brut)}</div>
+          <div class="text-muted" style="font-size:.78rem">facturable aux restaurants</div>
+        </div>
+        <div class="stat-card" style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:.9rem">
+          <div class="text-muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em">Commissions agents</div>
+          <div style="font-size:1.4rem;font-weight:700;color:#92400e">${fmtEUR(imp.data.totaux.commissions_total)}</div>
+          <div class="text-muted" style="font-size:.78rem">
+            propre ${fmtEUR(imp.data.totaux.commissions_propre)} · pf ${fmtEUR(imp.data.totaux.commissions_portefeuille)}<br>
+            N+1 ${fmtEUR(imp.data.totaux.commissions_n1)} · N+2 ${fmtEUR(imp.data.totaux.commissions_n2)}
+          </div>
+        </div>
+        <div class="stat-card" style="background:#e8f7ee;border:1px solid #bbe5cb;border-radius:8px;padding:.9rem">
+          <div class="text-muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em">Marge nette DropEat</div>
+          <div style="font-size:1.4rem;font-weight:700;color:#06A05A">${fmtEUR(imp.data.totaux.marge_dropeat_nette)}</div>
+          <div class="text-muted" style="font-size:.78rem">CA DropEat − toutes commissions</div>
+        </div>
+      </div>` : ''}
     <div class="card">
-      <div class="card-title"><i class="fas fa-history"></i> Historique des imports</div>
+      <div class="card-title"><i class="fas fa-history"></i> Historique des imports — financier</div>
       ${imp.data.imports.length ? `
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th>Date</th><th>Fichier</th><th>Restaurant / Marque</th><th>Période</th>
-              <th class="text-right">Lignes</th><th class="text-right">Importées</th><th class="text-right">Doublons</th>
-              <th class="text-right">Montant</th><th>Par</th><th class="text-right"></th></tr></thead>
-            <tbody>${imp.data.imports.map(i => `
+            <thead><tr>
+              <th>Date</th><th>Restaurant / Marque</th><th>Période</th>
+              <th class="text-right">Cmd</th>
+              <th class="text-right">CA resto</th>
+              <th class="text-right">CA DropEat</th>
+              <th class="text-right">Comm. agents</th>
+              <th class="text-right">Marge nette</th>
+              <th>Agent</th>
+              <th class="text-right">Actions</th>
+            </tr></thead>
+            <tbody>${imp.data.imports.map(i => {
+              const pf = i.marque_pf || i.resto_pf
+              return `
               <tr>
-                <td>${fmtDateTime(i.created_at)}</td>
-                <td>${escapeHtml(i.nom_fichier || '-')}</td>
-                <td>${escapeHtml(i.restaurant_nom + ' / ' + i.marque_nom)}</td>
+                <td>
+                  ${fmtDateTime(i.created_at)}
+                  <div class="text-muted" style="font-size:.72rem">${escapeHtml(i.nom_fichier || '-')}</div>
+                </td>
+                <td>
+                  ${escapeHtml(i.restaurant_nom + ' / ' + i.marque_nom)}
+                  ${pf ? '<span class="badge" style="background:#fde68a;color:#92400e;font-size:.65rem;margin-left:.3rem">PORTEFEUILLE 100%</span>' : ''}
+                </td>
                 <td>${i.periode_debut ? fmtDate(i.periode_debut) + ' → ' + fmtDate(i.periode_fin) : '-'}</td>
-                <td class="text-right">${fmtNum(i.nb_lignes)}</td>
-                <td class="text-right text-success">${fmtNum(i.nb_lignes_importees)}</td>
-                <td class="text-right">${fmtNum(i.nb_doublons)}</td>
-                <td class="text-right">${fmtEUR(i.montant_total)}</td>
-                <td>${i.uploader_nom ? escapeHtml(i.uploader_prenom + ' ' + i.uploader_nom) : '-'}</td>
-                <td class="text-right"><button class="btn btn-sm btn-danger" data-del="${i.id}"><i class="fas fa-trash"></i></button></td>
-              </tr>`).join('')}</tbody>
+                <td class="text-right">${fmtNum(i.nb_commandes_reel || 0)}</td>
+                <td class="text-right">${fmtEUR(i.ca_brut || 0)}</td>
+                <td class="text-right" style="color:#1e40af;font-weight:600">${pf ? '<span class="text-muted">—</span>' : fmtEUR(i.ca_dropeat_brut || 0)}</td>
+                <td class="text-right" style="color:#92400e">
+                  ${fmtEUR((i.commissions_propre || 0) + (i.commissions_portefeuille || 0) + (i.commissions_n1 || 0) + (i.commissions_n2 || 0))}
+                </td>
+                <td class="text-right" style="color:#06A05A;font-weight:600">${pf ? '0,00 €' : fmtEUR(i.marge_dropeat_nette || 0)}</td>
+                <td>${i.agent_prenom ? escapeHtml(i.agent_prenom + ' ' + i.agent_nom) : '-'}</td>
+                <td class="text-right" style="white-space:nowrap">
+                  <button class="btn btn-sm btn-secondary" data-details="${i.id}" title="Détail commissions"><i class="fas fa-eye"></i></button>
+                  <button class="btn btn-sm btn-danger" data-del="${i.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+                </td>
+              </tr>`}).join('')}</tbody>
           </table>
         </div>` : '<p class="text-muted">Aucun import pour le moment</p>'}
     </div>`
@@ -2799,6 +2845,142 @@ async function loadImportsPage(c, baseEndpoint) {
     'Supprimer cet import et toutes ses commandes ?',
     async () => { await api.delete(baseEndpoint + '/' + b.dataset.del); toast('Supprimé'); navigate(isAdmin ? 'imports' : 'a-imports') }
   ))
+
+  c.querySelectorAll('[data-details]').forEach(b => b.onclick = async () => {
+    try {
+      const { data } = await api.get(baseEndpoint + '/' + b.dataset.details + '/details')
+      showImportDetailsModal(data)
+    } catch (e) { toast(e.response?.data?.error || 'Erreur chargement détails', 'error') }
+  })
+}
+
+// === Modal détail import : breakdown par marque + par agent ===
+function showImportDetailsModal(data) {
+  const imp = data.import || {}
+  const t = data.totaux || {}
+  const pf = imp.marque_pf || imp.resto_pf
+  const m = openModal(
+    `<i class="fas fa-receipt"></i> Détail commissions — Import #${imp.id}`,
+    `
+    <div style="margin-bottom:1rem;padding:.7rem .9rem;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0">
+      <div style="font-weight:600;font-size:1.05rem">${escapeHtml(imp.restaurant_nom + ' / ' + imp.marque_nom)}</div>
+      <div class="text-muted" style="font-size:.85rem">
+        ${imp.periode_debut ? fmtDate(imp.periode_debut) + ' → ' + fmtDate(imp.periode_fin) : '-'}
+        · Agent N0 : <strong>${imp.agent_prenom ? escapeHtml(imp.agent_prenom + ' ' + imp.agent_nom) : '-'}</strong>
+        · Upload : ${imp.uploader_prenom ? escapeHtml(imp.uploader_prenom + ' ' + imp.uploader_nom) : '-'}
+        ${pf ? '<br><span class="badge" style="background:#fde68a;color:#92400e">PORTEFEUILLE 100% — DropEat ne facture pas, agent encaisse à 100%</span>' : ''}
+      </div>
+    </div>
+
+    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.6rem;margin-bottom:1rem">
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:.6rem">
+        <div class="text-muted" style="font-size:.7rem;text-transform:uppercase">Commandes</div>
+        <div style="font-size:1.1rem;font-weight:700">${fmtNum(t.nb_commandes || 0)}</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:.6rem">
+        <div class="text-muted" style="font-size:.7rem;text-transform:uppercase">CA brut resto</div>
+        <div style="font-size:1.1rem;font-weight:700">${fmtEUR(t.ca_brut || 0)}</div>
+      </div>
+      <div style="background:#eef6ff;border:1px solid #c7dffd;border-radius:6px;padding:.6rem">
+        <div class="text-muted" style="font-size:.7rem;text-transform:uppercase">CA DropEat brut</div>
+        <div style="font-size:1.1rem;font-weight:700;color:#1e40af">${pf ? '0,00 €' : fmtEUR(t.ca_dropeat_brut || 0)}</div>
+      </div>
+      <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:.6rem">
+        <div class="text-muted" style="font-size:.7rem;text-transform:uppercase">Comm. totales</div>
+        <div style="font-size:1.1rem;font-weight:700;color:#92400e">${fmtEUR(t.commissions_total || 0)}</div>
+      </div>
+      <div style="background:#e8f7ee;border:1px solid #bbe5cb;border-radius:6px;padding:.6rem">
+        <div class="text-muted" style="font-size:.7rem;text-transform:uppercase">Marge DropEat</div>
+        <div style="font-size:1.1rem;font-weight:700;color:#06A05A">${pf ? '0,00 €' : fmtEUR(t.marge_dropeat_nette || 0)}</div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-title" style="font-size:.95rem"><i class="fas fa-tags"></i> Par marque (${(data.par_marque || []).length})</div>
+      ${(data.par_marque || []).length ? `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>Marque</th>
+          <th class="text-right">Cmd</th>
+          <th class="text-right">CA brut</th>
+          <th class="text-right">CA DropEat</th>
+          <th class="text-right">Comm propre</th>
+          <th class="text-right">Comm pf</th>
+          <th class="text-right">N+1</th>
+          <th class="text-right">N+2</th>
+        </tr></thead>
+        <tbody>${data.par_marque.map(m => `
+          <tr>
+            <td>${escapeHtml(m.marque_nom)}${m.marque_pf ? ' <span class="badge" style="background:#fde68a;color:#92400e;font-size:.65rem">PF</span>' : ''}</td>
+            <td class="text-right">${fmtNum(m.nb_commandes)}</td>
+            <td class="text-right">${fmtEUR(m.ca_brut)}</td>
+            <td class="text-right">${m.marque_pf ? '<span class="text-muted">—</span>' : fmtEUR(m.ca_dropeat_brut)}</td>
+            <td class="text-right">${fmtEUR(m.comm_propre)}</td>
+            <td class="text-right">${fmtEUR(m.comm_portefeuille)}</td>
+            <td class="text-right">${fmtEUR(m.comm_n1)}</td>
+            <td class="text-right">${fmtEUR(m.comm_n2)}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>` : '<p class="text-muted">Aucune marque</p>'}
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-title" style="font-size:.95rem"><i class="fas fa-sitemap"></i> Par agent (chaîne MLM + DropEat)</div>
+      ${(data.par_agent || []).length ? `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>Niveau</th><th>Agent</th>
+          <th class="text-right">Propre</th>
+          <th class="text-right">Portefeuille</th>
+          <th class="text-right">N+1</th>
+          <th class="text-right">N+2</th>
+          <th class="text-right">Total</th>
+        </tr></thead>
+        <tbody>${data.par_agent.map(a => `
+          <tr style="${a.niveau === 'DROPEAT' ? 'background:#e8f7ee' : ''}">
+            <td><strong>${a.niveau}</strong></td>
+            <td>${escapeHtml((a.prenom || '') + ' ' + a.nom)}</td>
+            <td class="text-right">${a.commission_propre ? fmtEUR(a.commission_propre) : '-'}</td>
+            <td class="text-right">${a.commission_portefeuille ? fmtEUR(a.commission_portefeuille) : '-'}</td>
+            <td class="text-right">${a.commission_n1 ? fmtEUR(a.commission_n1) : '-'}</td>
+            <td class="text-right">${a.commission_n2 ? fmtEUR(a.commission_n2) : '-'}</td>
+            <td class="text-right" style="font-weight:600">${fmtEUR(a.total)}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>` : '<p class="text-muted">Aucun agent</p>'}
+    </div>
+
+    ${(data.commandes || []).length ? `
+    <div class="card">
+      <div class="card-title" style="font-size:.95rem"><i class="fas fa-list"></i> Échantillon commandes (${data.commandes.length})</div>
+      <div class="table-wrap" style="max-height:300px;overflow-y:auto"><table class="data-table">
+        <thead><tr>
+          <th>Date</th><th>Marque</th>
+          <th class="text-right">Brut</th>
+          <th class="text-right">Net</th>
+          <th class="text-right">DropEat</th>
+          <th class="text-right">Comm agent</th>
+          <th class="text-right">N+1</th><th class="text-right">N+2</th>
+        </tr></thead>
+        <tbody>${data.commandes.map(co => `
+          <tr>
+            <td style="font-size:.78rem">${fmtDateTime(co.date_commande)}</td>
+            <td style="font-size:.8rem">${escapeHtml(co.marque_nom)}</td>
+            <td class="text-right" style="font-size:.8rem">${fmtEUR(co.montant_brut || 0)}</td>
+            <td class="text-right" style="font-size:.8rem">${fmtEUR(co.montant_net || 0)}</td>
+            <td class="text-right" style="font-size:.8rem">${fmtEUR(co.montant_facture_resto || 0)}</td>
+            <td class="text-right" style="font-size:.8rem">${fmtEUR((co.commission_agent_montant || 0) + (co.commission_portefeuille_montant || 0))}</td>
+            <td class="text-right" style="font-size:.8rem">${fmtEUR(co.commission_n1_montant || 0)}</td>
+            <td class="text-right" style="font-size:.8rem">${fmtEUR(co.commission_n2_montant || 0)}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>
+    </div>` : ''}
+
+    <div class="form-actions" style="margin-top:1rem">
+      <button type="button" class="btn btn-secondary" data-close>Fermer</button>
+    </div>
+    `,
+    { size: 'xl' }
+  )
+  m.el.querySelector('[data-close]').onclick = () => m.close()
 }
 
 // --- Commissions ---
@@ -5008,31 +5190,138 @@ PAGES['a-factures'] = async (c) => {
 // ============================================================
 // Modal de création d'une facture AGENT → RESTAURANT (portefeuille 100%)
 // ============================================================
-function factureCreateAgentRestoModal(onSuccess) {
+// === HELPER : sélecteur de période flexible (jour / semaine / mois / custom) ===
+// Retourne un objet { html, attach(root), getPeriode() } qui injecte des champs
+// dans le formulaire et expose getPeriode() pour récupérer { annee, mois }
+// OU { date_debut, date_fin } selon le mode choisi par l'utilisateur.
+function periodeSelector(prefix) {
   const now = new Date()
   const annee = now.getFullYear()
   const moisCur = now.getMonth() + 1
+  const today = now.toISOString().substring(0, 10)
+  // Lundi de la semaine courante
+  const dow = (now.getDay() + 6) % 7 // 0 = lundi
+  const monday = new Date(now); monday.setDate(now.getDate() - dow)
+  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
+  const mondayStr = monday.toISOString().substring(0, 10)
+  const sundayStr = sunday.toISOString().substring(0, 10)
+  // 1er & dernier jour du mois courant
+  const firstM = new Date(annee, moisCur - 1, 1).toISOString().substring(0, 10)
+  const lastM = new Date(annee, moisCur, 0).toISOString().substring(0, 10)
+
+  const html = `
+    <div class="form-grid" style="margin-bottom:.4rem">
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Type de période</label>
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem;font-size:.85rem">
+          <label style="display:flex;align-items:center;gap:.25rem;cursor:pointer"><input type="radio" name="${prefix}_type" value="mois" checked> Mois entier</label>
+          <label style="display:flex;align-items:center;gap:.25rem;cursor:pointer"><input type="radio" name="${prefix}_type" value="jour"> Un seul jour</label>
+          <label style="display:flex;align-items:center;gap:.25rem;cursor:pointer"><input type="radio" name="${prefix}_type" value="semaine"> Semaine (Lun→Dim)</label>
+          <label style="display:flex;align-items:center;gap:.25rem;cursor:pointer"><input type="radio" name="${prefix}_type" value="custom"> Plage personnalisée</label>
+        </div>
+      </div>
+    </div>
+    <div class="form-grid" id="${prefix}_mois_block">
+      <div class="form-group"><label>Année</label><input id="${prefix}_annee" type="number" value="${annee}" min="2024" max="2030"/></div>
+      <div class="form-group"><label>Mois</label>
+        <select id="${prefix}_mois">${monthsFR.map((mo, i) => `<option value="${i+1}" ${i+1===moisCur?'selected':''}>${mo}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="form-grid" id="${prefix}_jour_block" style="display:none">
+      <div class="form-group" style="grid-column:1/-1"><label>Jour</label><input id="${prefix}_jour" type="date" value="${today}"/></div>
+    </div>
+    <div class="form-grid" id="${prefix}_semaine_block" style="display:none">
+      <div class="form-group" style="grid-column:1/-1"><label>Lundi de la semaine</label>
+        <input id="${prefix}_semaine" type="date" value="${mondayStr}"/>
+        <small class="text-muted">La semaine couvre 7 jours (Lundi → Dimanche).</small>
+      </div>
+    </div>
+    <div class="form-grid" id="${prefix}_custom_block" style="display:none">
+      <div class="form-group"><label>Du</label><input id="${prefix}_debut" type="date" value="${firstM}"/></div>
+      <div class="form-group"><label>Au</label><input id="${prefix}_fin" type="date" value="${lastM}"/></div>
+    </div>
+  `
+
+  function attach(root, onChange) {
+    const blocks = ['mois', 'jour', 'semaine', 'custom']
+    function showBlock(type) {
+      blocks.forEach(b => {
+        const el = root.querySelector(`#${prefix}_${b}_block`)
+        if (el) el.style.display = b === type ? '' : 'none'
+      })
+    }
+    root.querySelectorAll(`input[name="${prefix}_type"]`).forEach(r => {
+      r.onchange = () => { showBlock(r.value); onChange && onChange(getPeriode(root)) }
+    })
+    // Réagir aux changements de valeur
+    ;[`${prefix}_annee`, `${prefix}_mois`, `${prefix}_jour`, `${prefix}_semaine`, `${prefix}_debut`, `${prefix}_fin`].forEach(id => {
+      const el = root.querySelector('#' + id)
+      if (el) el.onchange = () => onChange && onChange(getPeriode(root))
+    })
+  }
+
+  function getPeriode(root) {
+    const type = root.querySelector(`input[name="${prefix}_type"]:checked`)?.value || 'mois'
+    if (type === 'mois') {
+      return {
+        type: 'mois',
+        annee: parseInt(root.querySelector('#' + prefix + '_annee').value),
+        mois: parseInt(root.querySelector('#' + prefix + '_mois').value)
+      }
+    }
+    if (type === 'jour') {
+      const d = root.querySelector('#' + prefix + '_jour').value
+      return { type: 'jour', date_debut: d, date_fin: d }
+    }
+    if (type === 'semaine') {
+      const lun = root.querySelector('#' + prefix + '_semaine').value
+      const dim = new Date(lun); dim.setDate(dim.getDate() + 6)
+      return { type: 'semaine', date_debut: lun, date_fin: dim.toISOString().substring(0, 10) }
+    }
+    // custom
+    return {
+      type: 'custom',
+      date_debut: root.querySelector('#' + prefix + '_debut').value,
+      date_fin: root.querySelector('#' + prefix + '_fin').value
+    }
+  }
+
+  // Construit les query params pour les endpoints GET (?annee=&mois= OU ?date_debut=&date_fin=)
+  function toQueryString(p) {
+    if (p.type === 'mois') return `annee=${p.annee}&mois=${p.mois}`
+    return `date_debut=${p.date_debut}&date_fin=${p.date_fin}`
+  }
+  function periodeLabel(p) {
+    if (p.type === 'mois') return `${monthsFR[p.mois-1]} ${p.annee}`
+    if (p.type === 'jour') return p.date_debut
+    if (p.type === 'semaine') return `Semaine ${p.date_debut} → ${p.date_fin}`
+    return `${p.date_debut} → ${p.date_fin}`
+  }
+
+  return { html, attach, getPeriode, toQueryString, periodeLabel }
+}
+
+function factureCreateAgentRestoModal(onSuccess) {
+  const ps = periodeSelector('fr')
   const m = modal('<i class="fas fa-star" style="color:#ea8a00"></i> Facture directe portefeuille (→ restaurant)', `
     <div style="background:#fffbeb;border-left:3px solid #ea8a00;padding:.7rem;border-radius:6px;margin-bottom:1rem;font-size:.85rem">
       <strong>Règle d'or :</strong> sur la 5e marque ou le 5e restaurant en <strong>portefeuille propriétaire</strong>,
       vous facturez <strong>directement le restaurant à 100%</strong>. DropEat ne touche rien, aucune commission N+1/N+2.
     </div>
+    ${ps.html}
     <div class="form-grid">
-      <div class="form-group"><label>Année</label><input id="frAnnee" type="number" value="${annee}" min="2024" max="2030"/></div>
-      <div class="form-group"><label>Mois</label>
-        <select id="frMois">${monthsFR.map((mo, i) => `<option value="${i+1}" ${i+1===moisCur?'selected':''}>${mo}</option>`).join('')}</select>
-      </div>
       <div class="form-group" style="grid-column:1/-1">
         <label>Restaurant éligible <span class="req">*</span></label>
         <select id="frResto" required>
-          <option value="">— Sélectionnez d'abord la période puis cliquez « Charger restos éligibles » —</option>
+          <option value="">— Choisissez la période puis « Charger restos éligibles » —</option>
         </select>
         <small class="text-muted">Seuls les restaurants ayant au moins une marque/restaurant en portefeuille avec des commandes sur la période sont listés.</small>
       </div>
     </div>
-    <div style="display:flex;gap:.5rem;margin:.6rem 0">
+    <div style="display:flex;gap:.5rem;margin:.6rem 0;flex-wrap:wrap">
       <button type="button" class="btn btn-secondary btn-sm" id="frLoadRestos"><i class="fas fa-sync"></i> Charger restos éligibles</button>
-      <button type="button" class="btn btn-info btn-sm" id="frPreviewBtn"><i class="fas fa-eye"></i> Aperçu</button>
+      <button type="button" class="btn btn-info btn-sm" id="frPreviewBtn"><i class="fas fa-eye"></i> Aperçu lignes</button>
+      <div style="margin-left:auto;align-self:center;font-size:.8rem" class="text-muted">Période : <strong id="frLabel"></strong></div>
     </div>
     <div id="frPreview" style="margin:1rem 0;padding:1rem;background:#f9fafb;border-radius:6px;display:none"></div>
     <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="frNotes" rows="2"></textarea></div>
@@ -5043,11 +5332,17 @@ function factureCreateAgentRestoModal(onSuccess) {
   `)
   m.el.querySelector('[data-close]').onclick = () => m.close()
 
+  function updateLabel() {
+    const p = ps.getPeriode(m.el)
+    m.el.querySelector('#frLabel').textContent = ps.periodeLabel(p)
+  }
+  ps.attach(m.el, () => { updateLabel(); loadRestos() })
+  updateLabel()
+
   async function loadRestos() {
-    const a = parseInt(m.el.querySelector('#frAnnee').value)
-    const mo = parseInt(m.el.querySelector('#frMois').value)
+    const p = ps.getPeriode(m.el)
     try {
-      const { data } = await api.get(`/factures/agent-resto/restos-eligibles?annee=${a}&mois=${mo}`)
+      const { data } = await api.get(`/factures/agent-resto/restos-eligibles?${ps.toQueryString(p)}`)
       const sel = m.el.querySelector('#frResto')
       sel.innerHTML = '<option value="">— Choisir —</option>' + (data.restos || []).map(r =>
         `<option value="${r.restaurant_id}">${escapeHtml(r.restaurant_nom)} — ${r.nb_commandes} cmd · CA ${fmtEUR(r.ca)} · à facturer ${fmtEUR(r.montant_facturable)}${r.resto_pf ? ' [Resto P]' : ''}${r.nb_marques_pf ? ` [${r.nb_marques_pf} marque(s) P]` : ''}</option>`
@@ -5060,23 +5355,21 @@ function factureCreateAgentRestoModal(onSuccess) {
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
   m.el.querySelector('#frLoadRestos').onclick = loadRestos
-  m.el.querySelector('#frAnnee').onchange = loadRestos
-  m.el.querySelector('#frMois').onchange = loadRestos
   // Auto-load au démarrage
   loadRestos()
 
   m.el.querySelector('#frPreviewBtn').onclick = async () => {
-    const a = parseInt(m.el.querySelector('#frAnnee').value)
-    const mo = parseInt(m.el.querySelector('#frMois').value)
+    const p = ps.getPeriode(m.el)
     const rid = parseInt(m.el.querySelector('#frResto').value)
     if (!rid) return toast('Sélectionnez un restaurant', 'error')
     try {
-      const { data } = await api.post('/factures/agent-resto/preview', { restaurant_id: rid, annee: a, mois: mo })
+      const body = { restaurant_id: rid, ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }) }
+      const { data } = await api.post('/factures/agent-resto/preview', body)
       const box = m.el.querySelector('#frPreview')
       box.style.display = 'block'
       box.innerHTML = data.lignes.length ? `
         <strong><i class="fas fa-star" style="color:#ea8a00"></i> Aperçu — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
-        <div class="text-muted" style="font-size:.78rem;margin:.3rem 0 .5rem 0">Restaurant : <strong>${escapeHtml(data.restaurant.nom)}</strong></div>
+        <div class="text-muted" style="font-size:.78rem;margin:.3rem 0 .5rem 0">Restaurant : <strong>${escapeHtml(data.restaurant.nom)}</strong> · Période : ${escapeHtml(data.periode.label || ps.periodeLabel(p))}</div>
         <table class="data-table" style="font-size:.8rem">
           <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">HT</th></tr></thead>
           <tbody>${data.lignes.map(l => `<tr>
@@ -5089,13 +5382,13 @@ function factureCreateAgentRestoModal(onSuccess) {
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
   m.el.querySelector('#frCreate').onclick = async () => {
-    const a = parseInt(m.el.querySelector('#frAnnee').value)
-    const mo = parseInt(m.el.querySelector('#frMois').value)
+    const p = ps.getPeriode(m.el)
     const rid = parseInt(m.el.querySelector('#frResto').value)
     const notes = m.el.querySelector('#frNotes').value
     if (!rid) return toast('Sélectionnez un restaurant', 'error')
     try {
-      const { data } = await api.post('/factures/agent-resto/create', { restaurant_id: rid, annee: a, mois: mo, notes })
+      const body = { restaurant_id: rid, notes, ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }) }
+      const { data } = await api.post('/factures/agent-resto/create', body)
       toast('Facture créée : ' + data.numero)
       m.close()
       onSuccess && onSuccess()
@@ -5104,37 +5397,43 @@ function factureCreateAgentRestoModal(onSuccess) {
 }
 
 function factureCreateAgentModal(onSuccess) {
-  const now = new Date()
-  const annee = now.getFullYear()
-  const moisCur = now.getMonth() + 1
-  const m = modal('<i class="fas fa-file-invoice"></i> Nouvelle facture de commissions', `
+  const ps = periodeSelector('fc')
+  const m = modal('<i class="fas fa-file-invoice"></i> Nouvelle facture de commissions (→ DropEat)', `
     <p class="text-muted" style="font-size:.85rem;margin-bottom:.6rem">
-      <i class="fas fa-circle-info"></i> Cette facture inclura automatiquement vos commissions propres, portefeuille, N+1 (vos filleuls directs) et N+2 (sous-filleuls) pour la période choisie.
+      <i class="fas fa-circle-info"></i> Cette facture inclura automatiquement vos commissions propres, N+1 (vos filleuls directs) et N+2 (sous-filleuls) pour la période choisie.
+      <strong>Les commandes en portefeuille propriétaire sont exclues</strong> (à facturer séparément au restaurant à 100%).
     </p>
-    <div class="form-grid">
-      <div class="form-group"><label>Année</label><input id="fcAnnee" type="number" value="${annee}" min="2024" max="2030"/></div>
-      <div class="form-group"><label>Mois</label>
-        <select id="fcMois">${monthsFR.map((mo, i) => `<option value="${i+1}" ${i+1===moisCur?'selected':''}>${mo}</option>`).join('')}</select>
-      </div>
+    ${ps.html}
+    <div style="display:flex;gap:.5rem;margin:.6rem 0;align-items:center">
+      <button type="button" class="btn btn-info btn-sm" id="fcPreviewBtn"><i class="fas fa-eye"></i> Aperçu lignes</button>
+      <div style="margin-left:auto;font-size:.8rem" class="text-muted">Période : <strong id="fcLabel"></strong></div>
     </div>
     <div id="fcPreview" style="margin:1rem 0;padding:1rem;background:#f9fafb;border-radius:6px;display:none"></div>
     <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="fcNotes" rows="2"></textarea></div>
     <div class="form-actions">
       <button type="button" class="btn btn-secondary" data-close>Annuler</button>
-      <button type="button" class="btn btn-info" id="fcPreviewBtn"><i class="fas fa-eye"></i> Aperçu</button>
       <button type="button" class="btn btn-primary" id="fcCreate"><i class="fas fa-file-invoice"></i> Créer brouillon</button>
     </div>
   `)
   m.el.querySelector('[data-close]').onclick = () => m.close()
+
+  function updateLabel() {
+    const p = ps.getPeriode(m.el)
+    m.el.querySelector('#fcLabel').textContent = ps.periodeLabel(p)
+  }
+  ps.attach(m.el, updateLabel)
+  updateLabel()
+
   m.el.querySelector('#fcPreviewBtn').onclick = async () => {
-    const a = parseInt(m.el.querySelector('#fcAnnee').value)
-    const mo = parseInt(m.el.querySelector('#fcMois').value)
+    const p = ps.getPeriode(m.el)
     try {
-      const { data } = await api.post('/factures/agent/preview', { annee: a, mois: mo })
+      const body = p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }
+      const { data } = await api.post('/factures/agent/preview', body)
       const box = m.el.querySelector('#fcPreview')
       box.style.display = 'block'
       box.innerHTML = data.lignes.length ? `
         <strong>Aperçu — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
+        <div class="text-muted" style="font-size:.78rem;margin:.3rem 0 .5rem 0">Période : ${escapeHtml(data.periode.label || ps.periodeLabel(p))}</div>
         <table class="data-table" style="font-size:.8rem;margin-top:.5rem">
           <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">Montant HT</th></tr></thead>
           <tbody>${data.lignes.map(l => `<tr>
@@ -5147,11 +5446,11 @@ function factureCreateAgentModal(onSuccess) {
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
   m.el.querySelector('#fcCreate').onclick = async () => {
-    const a = parseInt(m.el.querySelector('#fcAnnee').value)
-    const mo = parseInt(m.el.querySelector('#fcMois').value)
+    const p = ps.getPeriode(m.el)
     const notes = m.el.querySelector('#fcNotes').value
     try {
-      const { data } = await api.post('/factures/agent/create', { annee: a, mois: mo, notes })
+      const body = { notes, ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }) }
+      const { data } = await api.post('/factures/agent/create', body)
       toast('Facture créée : ' + data.numero)
       m.close()
       onSuccess && onSuccess()
@@ -5218,38 +5517,45 @@ PAGES['admin-factures'] = async (c) => {
 PAGES['admin-factures-resto'] = async (c) => {
   const { data } = await api.get('/admin/restaurants').catch(() => ({ data: { restaurants: [] } }))
   const restos = data.restaurants || []
-  const now = new Date()
+  const ps = periodeSelector('fdr')
   c.innerHTML = `
     <div class="page-header">
       <div><h1><i class="fas fa-file-export"></i> Facturer un restaurant</h1>
-        <div class="subtitle">Génération automatique de la facture DropEat → Restaurant selon ses marques actives</div></div>
+        <div class="subtitle">Génération automatique de la facture DropEat → Restaurant selon ses marques actives (hors portefeuille propriétaire)</div></div>
     </div>
     <div class="card">
       <div class="card-title"><i class="fas fa-list"></i> Sélectionner restaurant + période</div>
       <div class="form-grid">
         <div class="form-group" style="grid-column:1/-1"><label>Restaurant <span class="req">*</span></label>
-          <select id="frResto">
+          <select id="fdrResto">
             <option value="">— Choisir —</option>
             ${restos.map(r => `<option value="${r.id}">${escapeHtml(r.nom)} — ${escapeHtml(r.ville || '')}</option>`).join('')}
           </select>
         </div>
-        <div class="form-group"><label>Année</label><input id="frAnnee" type="number" value="${now.getFullYear()}" min="2024" max="2030"/></div>
-        <div class="form-group"><label>Mois</label>
-          <select id="frMois">${monthsFR.map((mo, i) => `<option value="${i+1}" ${i+1===now.getMonth()+1?'selected':''}>${mo}</option>`).join('')}</select>
-        </div>
+      </div>
+      ${ps.html}
+      <div style="display:flex;gap:.5rem;margin:.6rem 0;align-items:center">
+        <div style="margin-left:auto;font-size:.85rem" class="text-muted">Période : <strong id="fdrLabel"></strong></div>
       </div>
       <div class="form-actions">
-        <button class="btn btn-primary" id="frCreate"><i class="fas fa-file-invoice"></i> Générer la facture</button>
+        <button class="btn btn-primary" id="fdrCreate"><i class="fas fa-file-invoice"></i> Générer la facture</button>
       </div>
     </div>
   `
-  c.querySelector('#frCreate').onclick = async () => {
-    const restaurant_id = parseInt(c.querySelector('#frResto').value)
-    const annee = parseInt(c.querySelector('#frAnnee').value)
-    const mois = parseInt(c.querySelector('#frMois').value)
+  function updateLabel() {
+    const p = ps.getPeriode(c)
+    c.querySelector('#fdrLabel').textContent = ps.periodeLabel(p)
+  }
+  ps.attach(c, updateLabel)
+  updateLabel()
+
+  c.querySelector('#fdrCreate').onclick = async () => {
+    const restaurant_id = parseInt(c.querySelector('#fdrResto').value)
     if (!restaurant_id) return toast('Sélectionnez un restaurant', 'error')
+    const p = ps.getPeriode(c)
     try {
-      const { data } = await api.post('/factures/resto/create', { restaurant_id, annee, mois })
+      const body = { restaurant_id, ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }) }
+      const { data } = await api.post('/factures/resto/create', body)
       toast('Facture générée : ' + data.numero)
       factureViewerModal(data.facture_id)
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }

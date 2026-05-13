@@ -129,15 +129,46 @@ export interface LigneCommissionAgent {
   montant_ht: number
 }
 
+/**
+ * Convertit (annee, mois) ou (date_debut, date_fin) en plage SQL standard
+ * Retourne { debut: 'YYYY-MM-DD', fin: 'YYYY-MM-DDT23:59:59', label: '...' }
+ */
+export function resolvePeriode(opts: {
+  annee?: number
+  mois?: number
+  date_debut?: string
+  date_fin?: string
+}): { debut: string; fin: string; label: string; type: 'mois' | 'jour' | 'semaine' | 'custom' } {
+  if (opts.date_debut && opts.date_fin) {
+    const d = opts.date_debut.substring(0, 10)
+    const f = opts.date_fin.substring(0, 10)
+    let type: 'jour' | 'semaine' | 'custom' = 'custom'
+    if (d === f) type = 'jour'
+    else {
+      const diff = (new Date(f).getTime() - new Date(d).getTime()) / 86400000
+      if (diff === 6) type = 'semaine'
+    }
+    const label = d === f ? d : `${d} → ${f}`
+    return { debut: `${d}T00:00:00`, fin: `${f}T23:59:59`, label, type }
+  }
+  const annee = opts.annee!
+  const mois = opts.mois!
+  const debut = `${annee}-${String(mois).padStart(2, '0')}-01`
+  const finJ = new Date(annee, mois, 0).getDate()
+  const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(finJ).padStart(2, '0')}T23:59:59`
+  return { debut, fin, label: `${annee}/${String(mois).padStart(2, '0')}`, type: 'mois' }
+}
+
 export async function buildLignesFactureAgent(
   db: D1Database,
   agentId: number,
   annee: number,
-  mois: number
+  mois: number,
+  range?: { debut: string; fin: string }
 ): Promise<LigneCommissionAgent[]> {
-  const debut = `${annee}-${String(mois).padStart(2, '0')}-01`
-  const finJ = new Date(annee, mois, 0).getDate()
-  const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(finJ).padStart(2, '0')}T23:59:59`
+  const { debut, fin } = range
+    ? { debut: range.debut, fin: range.fin }
+    : resolvePeriode({ annee, mois })
 
   const lignes: LigneCommissionAgent[] = []
 
@@ -254,11 +285,12 @@ export async function buildLignesFactureRestaurant(
   db: D1Database,
   restaurantId: number,
   annee: number,
-  mois: number
+  mois: number,
+  range?: { debut: string; fin: string }
 ): Promise<LigneCommissionAgent[]> {
-  const debut = `${annee}-${String(mois).padStart(2, '0')}-01`
-  const finJ = new Date(annee, mois, 0).getDate()
-  const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(finJ).padStart(2, '0')}T23:59:59`
+  const { debut, fin } = range
+    ? { debut: range.debut, fin: range.fin }
+    : resolvePeriode({ annee, mois })
 
   // On récupère aussi le flag resto pour exclure si le resto entier est portefeuille
   const resto = await db.prepare(
@@ -314,11 +346,12 @@ export async function buildLignesFactureAgentResto(
   agentId: number,
   restaurantId: number,
   annee: number,
-  mois: number
+  mois: number,
+  range?: { debut: string; fin: string }
 ): Promise<LigneCommissionAgent[]> {
-  const debut = `${annee}-${String(mois).padStart(2, '0')}-01`
-  const finJ = new Date(annee, mois, 0).getDate()
-  const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(finJ).padStart(2, '0')}T23:59:59`
+  const { debut, fin } = range
+    ? { debut: range.debut, fin: range.fin }
+    : resolvePeriode({ annee, mois })
 
   // On ne prend QUE les marques en portefeuille (marque PF OU resto entier PF)
   // ET on filtre sur restaurant_id + agent_id (sécurité : l'agent ne peut facturer
@@ -386,7 +419,8 @@ export async function listRestosPortefeuilleAvecCommandes(
   db: D1Database,
   agentId: number,
   annee: number,
-  mois: number
+  mois: number,
+  range?: { debut: string; fin: string }
 ): Promise<Array<{
   restaurant_id: number
   restaurant_nom: string
@@ -396,9 +430,9 @@ export async function listRestosPortefeuilleAvecCommandes(
   ca: number
   montant_facturable: number
 }>> {
-  const debut = `${annee}-${String(mois).padStart(2, '0')}-01`
-  const finJ = new Date(annee, mois, 0).getDate()
-  const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(finJ).padStart(2, '0')}T23:59:59`
+  const { debut, fin } = range
+    ? { debut: range.debut, fin: range.fin }
+    : resolvePeriode({ annee, mois })
 
   const { results } = await db.prepare(`
     SELECT

@@ -16,8 +16,121 @@ import {
   buildLignesFactureRestaurant,
   buildLignesFactureAgentResto,
   listRestosPortefeuilleAvecCommandes,
+  resolvePeriode,
   type ProfilSociete
 } from '../lib/factures'
+
+// ---------- Helpers période + anti-doublons ----------
+
+/**
+ * Résout la période demandée par le client :
+ *   - { annee, mois } (mois entier)
+ *   - { date_debut, date_fin } (plage libre : jour, semaine, plage custom)
+ * Retourne { range, annee, mois, label, type } pour usage SQL + stockage.
+ */
+function parsePeriodeBody(body: any) {
+  if (body.date_debut && body.date_fin) {
+    const r = resolvePeriode({ date_debut: body.date_debut, date_fin: body.date_fin })
+    const d = new Date(body.date_debut)
+    return {
+      range: { debut: r.debut, fin: r.fin },
+      annee: d.getFullYear(),
+      mois: d.getMonth() + 1,
+      label: r.label,
+      type: r.type,
+      date_debut: body.date_debut.substring(0, 10),
+      date_fin: body.date_fin.substring(0, 10)
+    }
+  }
+  if (body.annee && body.mois) {
+    const r = resolvePeriode({ annee: body.annee, mois: body.mois })
+    return {
+      range: { debut: r.debut, fin: r.fin },
+      annee: body.annee,
+      mois: body.mois,
+      label: r.label,
+      type: r.type,
+      date_debut: r.debut.substring(0, 10),
+      date_fin: r.fin.substring(0, 10)
+    }
+  }
+  return null
+}
+
+/**
+ * Vérifie qu'aucune autre facture (du même type, même émetteur ou même destinataire selon le cas)
+ * ne couvre déjà cette plage de dates (chevauchement strict).
+ * On utilise les colonnes existantes (periode_annee/periode_mois) pour pré-filtrer
+ * puis les notes_internes JSON (date_debut/date_fin) pour le chevauchement précis si présent,
+ * sinon on compare le mois.
+ *
+ * Retourne null si OK, ou la facture en conflit.
+ */
+async function checkChevauchement(
+  db: D1Database,
+  opts: {
+    type: 'agent_to_dropeat' | 'dropeat_to_resto' | 'agent_to_resto'
+    emetteur_user_id?: number
+    dest_restaurant_id?: number
+    date_debut: string
+    date_fin: string
+    annee: number
+    mois: number
+  }
+): Promise<any | null> {
+  const where: string[] = [`f.type = ?`, `f.statut NOT IN ('annulee','refusee')`]
+  const params: any[] = [opts.type]
+  if (opts.emetteur_user_id) {
+    where.push('f.emetteur_user_id = ?'); params.push(opts.emetteur_user_id)
+  }
+  if (opts.dest_restaurant_id) {
+    where.push('f.dest_restaurant_id = ?'); params.push(opts.dest_restaurant_id)
+  }
+
+  const { results } = await db.prepare(`
+    SELECT id, numero, statut, periode_annee, periode_mois, notes_internes
+    FROM factures f
+    WHERE ${where.join(' AND ')}
+  `).bind(...params).all() as any
+
+  // Pour chaque facture existante : déterminer sa plage (depuis notes_internes JSON
+  // si on l'a stockée là, sinon depuis periode_annee/mois)
+  for (const f of results as any[]) {
+    let fDeb = '', fFin = ''
+    try {
+      const meta = JSON.parse(f.notes_internes || '{}')
+      if (meta.__periode_debut && meta.__periode_fin) {
+        fDeb = meta.__periode_debut
+        fFin = meta.__periode_fin
+      }
+    } catch {}
+    if (!fDeb || !fFin) {
+      const a = f.periode_annee, m = f.periode_mois
+      const finJ = new Date(a, m, 0).getDate()
+      fDeb = `${a}-${String(m).padStart(2, '0')}-01`
+      fFin = `${a}-${String(m).padStart(2, '0')}-${String(finJ).padStart(2, '0')}`
+    }
+    // Chevauchement : (deb1 <= fin2) AND (fin1 >= deb2)
+    if (opts.date_debut <= fFin && opts.date_fin >= fDeb) {
+      return f
+    }
+  }
+  return null
+}
+
+/**
+ * Sérialise les métadonnées de période dans notes_internes (JSON)
+ * pour permettre la détection précise de chevauchement même avec des plages custom.
+ */
+function buildNotesInternes(userNotes: string | null | undefined, periode: { date_debut: string; date_fin: string; type: string; label: string }): string {
+  return JSON.stringify({
+    __periode_debut: periode.date_debut,
+    __periode_fin: periode.date_fin,
+    __periode_type: periode.type,
+    __periode_label: periode.label,
+    notes: userNotes || ''
+  })
+}
 
 const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>()
 app.use('*', requireAuth)
@@ -40,28 +153,35 @@ function fmtDate(d: Date) {
 
 // ============================================================
 // POST /api/factures/agent/preview
-// Body : { annee, mois }
+// Body : { annee, mois } OU { date_debut, date_fin }
 // → Aperçu des lignes sans créer la facture (pour confirmation)
 // ============================================================
 app.post('/agent/preview', async (c) => {
   const user = c.get('user')
-  const { annee, mois } = await c.req.json()
-  if (!annee || !mois) return c.json({ error: 'annee, mois requis' }, 400)
+  const body = await c.req.json()
+  const periode = parsePeriodeBody(body)
+  if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
 
-  const lignes = await buildLignesFactureAgent(c.env.DB, user.id, annee, mois)
+  const lignes = await buildLignesFactureAgent(c.env.DB, user.id, periode.annee, periode.mois, periode.range)
   const total = lignes.reduce((s, l) => s + l.montant_ht, 0)
-  return c.json({ lignes, total, nb_lignes: lignes.length, periode: { annee, mois } })
+  return c.json({
+    lignes, total, nb_lignes: lignes.length,
+    periode: { annee: periode.annee, mois: periode.mois, label: periode.label, type: periode.type, date_debut: periode.date_debut, date_fin: periode.date_fin }
+  })
 })
 
 // ============================================================
 // POST /api/factures/agent/create
-// Body : { annee, mois, notes? }
+// Body : { annee, mois, notes? } OU { date_debut, date_fin, notes? }
 // → Crée une facture brouillon agent_to_dropeat
+// Anti-doublons : chevauchement strict des plages (pas seulement annee/mois)
 // ============================================================
 app.post('/agent/create', async (c) => {
   const user = c.get('user')
-  const { annee, mois, notes } = await c.req.json()
-  if (!annee || !mois) return c.json({ error: 'annee, mois requis' }, 400)
+  const body = await c.req.json()
+  const periode = parsePeriodeBody(body)
+  if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
+  const { notes } = body
 
   // Vérif : profil société rempli
   const profil = await getProfil(c.env.DB, user.id)
@@ -69,19 +189,21 @@ app.post('/agent/create', async (c) => {
     return c.json({ error: 'Veuillez compléter votre profil société avant de créer une facture (Mon profil société)' }, 400)
   }
 
-  // Vérif : pas de facture déjà existante pour cette période (sauf annulee/refusee)
-  const existing = await c.env.DB.prepare(`
-    SELECT id, numero, statut FROM factures
-    WHERE emetteur_user_id = ? AND periode_annee = ? AND periode_mois = ?
-      AND type = 'agent_to_dropeat'
-      AND statut NOT IN ('annulee','refusee')
-  `).bind(user.id, annee, mois).first() as any
-  if (existing) {
-    return c.json({ error: `Une facture existe déjà pour cette période : ${existing.numero} (${existing.statut})` }, 400)
+  // Anti-doublons : chevauchement avec une facture existante de cet émetteur
+  const conflit = await checkChevauchement(c.env.DB, {
+    type: 'agent_to_dropeat',
+    emetteur_user_id: user.id,
+    date_debut: periode.date_debut,
+    date_fin: periode.date_fin,
+    annee: periode.annee,
+    mois: periode.mois
+  })
+  if (conflit) {
+    return c.json({ error: `Une facture chevauche déjà cette période : ${conflit.numero} (${conflit.statut})` }, 400)
   }
 
   // Construire les lignes
-  const lignes = await buildLignesFactureAgent(c.env.DB, user.id, annee, mois)
+  const lignes = await buildLignesFactureAgent(c.env.DB, user.id, periode.annee, periode.mois, periode.range)
   if (!lignes.length) return c.json({ error: 'Aucune commission à facturer pour cette période' }, 400)
   const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
 
@@ -93,8 +215,8 @@ app.post('/agent/create', async (c) => {
   const saProfil = sa ? await getProfil(c.env.DB, sa.id) : null
   const destSnap = JSON.stringify(saProfil || { raison_sociale: 'DROPEAT LTD', pays: 'United Kingdom' })
 
-  // Numéro
-  const prefixe = `AGT-${annee}-${String(mois).padStart(2, '0')}`
+  // Numéro : préfixe basé sur le mois principal de la période
+  const prefixe = `AGT-${periode.annee}-${String(periode.mois).padStart(2, '0')}`
   const numero = await getNextFactureNumero(c.env.DB, prefixe, 4)
 
   const taux = profil.taux_tva || 0
@@ -104,6 +226,7 @@ app.post('/agent/create', async (c) => {
   const dateEmission = new Date()
   const dateEcheance = addDays(dateEmission, 30)
   const mentions = JSON.stringify(mentionsLegales(profil))
+  const notesJSON = buildNotesInternes(notes, periode)
 
   const r = await c.env.DB.prepare(`
     INSERT INTO factures (
@@ -117,10 +240,10 @@ app.post('/agent/create', async (c) => {
   `).bind(
     numero, user.id, emetteurSnap,
     sa?.id || null, destSnap,
-    annee, mois,
+    periode.annee, periode.mois,
     fmtDate(dateEmission), fmtDate(dateEcheance),
     totalHT, montantTVA, taux, totalTTC, devise,
-    mentions, notes || null
+    mentions, notesJSON
   ).run()
 
   const factureId = r.meta.last_row_id as number
@@ -154,23 +277,28 @@ app.post('/agent/create', async (c) => {
 app.post('/resto/create', async (c) => {
   const user = c.get('user')
   if (user.role !== 'superadmin') return c.json({ error: 'Réservé superadmin' }, 403)
-  const { restaurant_id, annee, mois } = await c.req.json()
-  if (!restaurant_id || !annee || !mois) return c.json({ error: 'restaurant_id, annee, mois requis' }, 400)
+  const body = await c.req.json()
+  const { restaurant_id } = body
+  if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
+  const periode = parsePeriodeBody(body)
+  if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
 
   const profil = await getProfil(c.env.DB, user.id)
   if (!profil || !profil.raison_sociale) {
     return c.json({ error: 'Veuillez compléter le profil société DROPEAT LTD avant de générer une facture' }, 400)
   }
 
-  // Vérif existence
-  const existing = await c.env.DB.prepare(`
-    SELECT id, numero, statut FROM factures
-    WHERE dest_restaurant_id = ? AND periode_annee = ? AND periode_mois = ?
-      AND type = 'dropeat_to_resto'
-      AND statut NOT IN ('annulee')
-  `).bind(restaurant_id, annee, mois).first() as any
-  if (existing) {
-    return c.json({ error: `Une facture existe déjà pour cette période : ${existing.numero} (${existing.statut})` }, 400)
+  // Anti-doublons : chevauchement
+  const conflit = await checkChevauchement(c.env.DB, {
+    type: 'dropeat_to_resto',
+    dest_restaurant_id: restaurant_id,
+    date_debut: periode.date_debut,
+    date_fin: periode.date_fin,
+    annee: periode.annee,
+    mois: periode.mois
+  })
+  if (conflit) {
+    return c.json({ error: `Une facture chevauche déjà cette période pour ce restaurant : ${conflit.numero} (${conflit.statut})` }, 400)
   }
 
   const resto = await c.env.DB.prepare(`
@@ -179,7 +307,7 @@ app.post('/resto/create', async (c) => {
   `).bind(restaurant_id).first() as any
   if (!resto) return c.json({ error: 'Restaurant introuvable' }, 404)
 
-  const lignes = await buildLignesFactureRestaurant(c.env.DB, restaurant_id, annee, mois)
+  const lignes = await buildLignesFactureRestaurant(c.env.DB, restaurant_id, periode.annee, periode.mois, periode.range)
   if (!lignes.length) return c.json({ error: 'Aucune facturation à émettre pour cette période' }, 400)
   const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
 
@@ -196,7 +324,7 @@ app.post('/resto/create', async (c) => {
     telephone: resto.telephone
   })
 
-  const prefixe = `DRP-${annee}-${String(mois).padStart(2, '0')}-R`
+  const prefixe = `DRP-${periode.annee}-${String(periode.mois).padStart(2, '0')}-R`
   const numero = await getNextFactureNumero(c.env.DB, prefixe, 3)
 
   const taux = profil.taux_tva || 0
@@ -206,6 +334,7 @@ app.post('/resto/create', async (c) => {
   const dateEmission = new Date()
   const dateEcheance = addDays(dateEmission, 30)
   const mentions = JSON.stringify(mentionsLegales(profil))
+  const notesJSON = buildNotesInternes(null, periode)
 
   const r = await c.env.DB.prepare(`
     INSERT INTO factures (
@@ -214,15 +343,15 @@ app.post('/resto/create', async (c) => {
       periode_annee, periode_mois,
       date_emission, date_echeance,
       montant_ht, montant_tva, taux_tva, montant_ttc, devise,
-      statut, mentions_legales
-    ) VALUES (?, 'dropeat_to_resto', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'envoyee', ?)
+      statut, mentions_legales, notes_internes
+    ) VALUES (?, 'dropeat_to_resto', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'envoyee', ?, ?)
   `).bind(
     numero, user.id, emetteurSnap,
     restaurant_id, destSnap,
-    annee, mois,
+    periode.annee, periode.mois,
     fmtDate(dateEmission), fmtDate(dateEcheance),
     totalHT, montantTVA, taux, totalTTC, devise,
-    mentions
+    mentions, notesJSON
   ).run()
   const factureId = r.meta.last_row_id as number
   await c.env.DB.prepare(`UPDATE factures SET envoyee_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(factureId).run()
@@ -256,24 +385,36 @@ app.post('/resto/create', async (c) => {
 // Pas de commission N+1/N+2 (déjà exclu côté calcul).
 // ============================================================
 
-// GET /api/factures/agent-resto/restos-eligibles?annee=&mois=
+// GET /api/factures/agent-resto/restos-eligibles?annee=&mois= OU ?date_debut=&date_fin=
 // Liste les restaurants éligibles à facturation directe par l'agent connecté
 app.get('/agent-resto/restos-eligibles', async (c) => {
   const user = c.get('user')
-  const annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
-  const mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
-  const restos = await listRestosPortefeuilleAvecCommandes(c.env.DB, user.id, annee, mois)
-  return c.json({ restos, annee, mois })
+  const date_debut = c.req.query('date_debut')
+  const date_fin = c.req.query('date_fin')
+  let annee: number, mois: number, range: { debut: string; fin: string } | undefined
+  if (date_debut && date_fin) {
+    const r = resolvePeriode({ date_debut, date_fin })
+    annee = new Date(date_debut).getFullYear()
+    mois = new Date(date_debut).getMonth() + 1
+    range = { debut: r.debut, fin: r.fin }
+  } else {
+    annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+    mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+  }
+  const restos = await listRestosPortefeuilleAvecCommandes(c.env.DB, user.id, annee, mois, range)
+  return c.json({ restos, annee, mois, date_debut: date_debut || null, date_fin: date_fin || null })
 })
 
 // POST /api/factures/agent-resto/preview
-// Body : { restaurant_id, annee, mois }
+// Body : { restaurant_id, annee, mois } OU { restaurant_id, date_debut, date_fin }
 app.post('/agent-resto/preview', async (c) => {
   const user = c.get('user')
-  const { restaurant_id, annee, mois } = await c.req.json()
-  if (!restaurant_id || !annee || !mois) {
-    return c.json({ error: 'restaurant_id, annee, mois requis' }, 400)
-  }
+  const body = await c.req.json()
+  const { restaurant_id } = body
+  if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
+  const periode = parsePeriodeBody(body)
+  if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
+
   // Vérifier que le restaurant appartient bien à l'agent
   const resto = await c.env.DB.prepare(
     'SELECT id, nom, agent_id FROM restaurants WHERE id = ?'
@@ -283,19 +424,24 @@ app.post('/agent-resto/preview', async (c) => {
     return c.json({ error: 'Ce restaurant ne vous appartient pas' }, 403)
   }
 
-  const lignes = await buildLignesFactureAgentResto(c.env.DB, user.id, restaurant_id, annee, mois)
+  const lignes = await buildLignesFactureAgentResto(c.env.DB, user.id, restaurant_id, periode.annee, periode.mois, periode.range)
   const total = lignes.reduce((s, l) => s + l.montant_ht, 0)
-  return c.json({ lignes, total, nb_lignes: lignes.length, periode: { annee, mois }, restaurant: { id: resto.id, nom: resto.nom } })
+  return c.json({
+    lignes, total, nb_lignes: lignes.length,
+    periode: { annee: periode.annee, mois: periode.mois, label: periode.label, type: periode.type, date_debut: periode.date_debut, date_fin: periode.date_fin },
+    restaurant: { id: resto.id, nom: resto.nom }
+  })
 })
 
 // POST /api/factures/agent-resto/create
-// Body : { restaurant_id, annee, mois, notes? }
+// Body : { restaurant_id, annee, mois, notes? } OU { restaurant_id, date_debut, date_fin, notes? }
 app.post('/agent-resto/create', async (c) => {
   const user = c.get('user')
-  const { restaurant_id, annee, mois, notes } = await c.req.json()
-  if (!restaurant_id || !annee || !mois) {
-    return c.json({ error: 'restaurant_id, annee, mois requis' }, 400)
-  }
+  const body = await c.req.json()
+  const { restaurant_id, notes } = body
+  if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
+  const periode = parsePeriodeBody(body)
+  if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
 
   // Vérif profil société rempli
   const profil = await getProfil(c.env.DB, user.id)
@@ -314,19 +460,21 @@ app.post('/agent-resto/create', async (c) => {
     return c.json({ error: 'Ce restaurant ne vous appartient pas' }, 403)
   }
 
-  // Vérif : pas de facture existante
-  const existing = await c.env.DB.prepare(`
-    SELECT id, numero, statut FROM factures
-    WHERE emetteur_user_id = ? AND dest_restaurant_id = ?
-      AND periode_annee = ? AND periode_mois = ?
-      AND type = 'agent_to_resto'
-      AND statut NOT IN ('annulee','refusee')
-  `).bind(user.id, restaurant_id, annee, mois).first() as any
-  if (existing) {
-    return c.json({ error: `Une facture existe déjà pour cette période et ce restaurant : ${existing.numero} (${existing.statut})` }, 400)
+  // Anti-doublons : chevauchement strict (couvre les facturations partielles + custom)
+  const conflit = await checkChevauchement(c.env.DB, {
+    type: 'agent_to_resto',
+    emetteur_user_id: user.id,
+    dest_restaurant_id: restaurant_id,
+    date_debut: periode.date_debut,
+    date_fin: periode.date_fin,
+    annee: periode.annee,
+    mois: periode.mois
+  })
+  if (conflit) {
+    return c.json({ error: `Une facture chevauche déjà cette période pour ce restaurant : ${conflit.numero} (${conflit.statut})` }, 400)
   }
 
-  const lignes = await buildLignesFactureAgentResto(c.env.DB, user.id, restaurant_id, annee, mois)
+  const lignes = await buildLignesFactureAgentResto(c.env.DB, user.id, restaurant_id, periode.annee, periode.mois, periode.range)
   if (!lignes.length) return c.json({ error: 'Aucun encaissement direct (portefeuille) à facturer pour cette période' }, 400)
   const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
 
@@ -344,7 +492,7 @@ app.post('/agent-resto/create', async (c) => {
     telephone: resto.telephone
   })
 
-  const prefixe = `AGR-${annee}-${String(mois).padStart(2, '0')}`
+  const prefixe = `AGR-${periode.annee}-${String(periode.mois).padStart(2, '0')}`
   const numero = await getNextFactureNumero(c.env.DB, prefixe, 4)
 
   const taux = profil.taux_tva || 0
@@ -354,6 +502,7 @@ app.post('/agent-resto/create', async (c) => {
   const dateEmission = new Date()
   const dateEcheance = addDays(dateEmission, 30)
   const mentions = JSON.stringify(mentionsLegales(profil))
+  const notesJSON = buildNotesInternes(notes, periode)
 
   const r = await c.env.DB.prepare(`
     INSERT INTO factures (
@@ -367,10 +516,10 @@ app.post('/agent-resto/create', async (c) => {
   `).bind(
     numero, user.id, emetteurSnap,
     restaurant_id, destSnap,
-    annee, mois,
+    periode.annee, periode.mois,
     fmtDate(dateEmission), fmtDate(dateEcheance),
     totalHT, montantTVA, taux, totalTTC, devise,
-    mentions, notes || null
+    mentions, notesJSON
   ).run()
   const factureId = r.meta.last_row_id as number
 
