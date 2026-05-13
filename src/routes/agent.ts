@@ -204,19 +204,30 @@ app.get('/mes-restaurants/tree', async (c) => {
     checksMap[ci.restaurant_id].push(ci)
   }
 
-  // 4) Documents : nb par type pour chaque resto
-  const { results: docs } = await c.env.DB.prepare(`
-    SELECT restaurant_id, type_document, statut, COUNT(*) as nb
+  // 4) Documents : liste détaillée par type pour chaque resto (avec id, statut, nom_fichier, mime…)
+  const { results: docsList } = await c.env.DB.prepare(`
+    SELECT id, restaurant_id, type_document, nom_fichier, mime_type, taille_octets,
+      url_externe, date_emission, date_expiration, statut, created_at,
+      (contenu_base64 IS NOT NULL) as has_content
     FROM restaurant_documents
     WHERE restaurant_id IN (${ph})
-    GROUP BY restaurant_id, type_document, statut
+    ORDER BY created_at DESC
   `).bind(...restoIds).all() as any
-  const docsMap: Record<number, Record<string, { fourni: number, valide: number }>> = {}
-  for (const d of docs as any[]) {
+  // Structure : docsMap[restoId][type_document] = { fourni, valide, fichiers: [...] }
+  const docsMap: Record<number, Record<string, { fourni: number, valide: number, fichiers: any[] }>> = {}
+  for (const d of docsList as any[]) {
     if (!docsMap[d.restaurant_id]) docsMap[d.restaurant_id] = {}
-    if (!docsMap[d.restaurant_id][d.type_document]) docsMap[d.restaurant_id][d.type_document] = { fourni: 0, valide: 0 }
-    docsMap[d.restaurant_id][d.type_document].fourni += d.nb
-    if (d.statut === 'valide') docsMap[d.restaurant_id][d.type_document].valide += d.nb
+    if (!docsMap[d.restaurant_id][d.type_document]) {
+      docsMap[d.restaurant_id][d.type_document] = { fourni: 0, valide: 0, fichiers: [] }
+    }
+    docsMap[d.restaurant_id][d.type_document].fourni += 1
+    if (d.statut === 'valide') docsMap[d.restaurant_id][d.type_document].valide += 1
+    docsMap[d.restaurant_id][d.type_document].fichiers.push({
+      id: d.id, nom_fichier: d.nom_fichier, mime_type: d.mime_type,
+      taille_octets: d.taille_octets, url_externe: d.url_externe,
+      date_emission: d.date_emission, date_expiration: d.date_expiration,
+      statut: d.statut, has_content: !!d.has_content, created_at: d.created_at
+    })
   }
 
   // 5) Sous-agents éventuels = agents de niveau > moi qui sont rattachés au resto via agent_id
@@ -956,6 +967,101 @@ app.get('/sous-agents/commissions', async (c) => {
     ORDER BY u.niveau, commissions_propres DESC
   `).bind(debut, fin, debut, fin, debut, fin, ...otherIds).all() as any
   return c.json({ sous_agents: results, periode: { annee, mois } })
+})
+
+// ============================================================
+// DOCUMENTS (agent — restos de sa branche uniquement)
+// ============================================================
+
+// Helper : vérifie que le restaurant appartient à la branche de l'agent
+async function assertRestoInBranch(db: D1Database, userId: number, restaurantId: number): Promise<boolean> {
+  const branchIds = await getBranchAgentIds(db, userId)
+  const r = await db.prepare('SELECT agent_id FROM restaurants WHERE id = ?').bind(restaurantId).first() as any
+  return !!(r && branchIds.includes(r.agent_id))
+}
+
+// GET /api/agent/documents/restaurant/:id — liste des documents d'un resto
+app.get('/documents/restaurant/:id', async (c) => {
+  const me = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  if (!(await assertRestoInBranch(c.env.DB, me.id, id))) return c.json({ error: 'Accès refusé' }, 403)
+  const { results } = await c.env.DB.prepare(`
+    SELECT d.id, d.restaurant_id, d.type_document, d.nom_fichier, d.taille_octets, d.mime_type,
+      d.url_externe, d.date_emission, d.date_expiration, d.statut, d.notes,
+      d.created_at, d.updated_at,
+      u.nom as uploader_nom, u.prenom as uploader_prenom,
+      (d.contenu_base64 IS NOT NULL) as has_content
+    FROM restaurant_documents d
+    LEFT JOIN users u ON d.uploaded_by = u.id
+    WHERE d.restaurant_id = ?
+    ORDER BY d.created_at DESC
+  `).bind(id).all() as any
+  return c.json({ documents: results })
+})
+
+// GET /api/agent/documents/:id/contenu — contenu base64 (avec check permission)
+app.get('/documents/:id/contenu', async (c) => {
+  const me = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  const doc = await c.env.DB.prepare(`
+    SELECT d.*, r.agent_id FROM restaurant_documents d
+    JOIN restaurants r ON d.restaurant_id = r.id
+    WHERE d.id = ?
+  `).bind(id).first() as any
+  if (!doc) return c.json({ error: 'Document introuvable' }, 404)
+  const branchIds = await getBranchAgentIds(c.env.DB, me.id)
+  if (!branchIds.includes(doc.agent_id)) return c.json({ error: 'Accès refusé' }, 403)
+  return c.json({
+    id: doc.id,
+    nom_fichier: doc.nom_fichier,
+    mime_type: doc.mime_type,
+    taille_octets: doc.taille_octets,
+    contenu_base64: doc.contenu_base64,
+    url_externe: doc.url_externe,
+    statut: doc.statut
+  })
+})
+
+// POST /api/agent/documents — upload d'un document
+app.post('/documents', async (c) => {
+  const me = c.get('user')
+  const { restaurant_id, type_document, nom_fichier, mime_type, taille, contenu_base64, url_externe, date_emission, date_expiration, commentaire } = await c.req.json()
+  if (!restaurant_id || !type_document || !nom_fichier) {
+    return c.json({ error: 'restaurant_id, type_document et nom_fichier requis' }, 400)
+  }
+  if (!(await assertRestoInBranch(c.env.DB, me.id, restaurant_id))) return c.json({ error: 'Accès refusé' }, 403)
+  // Limite taille base64 : ~5 Mo brut = ~7 Mo base64
+  if (contenu_base64 && contenu_base64.length > 7 * 1024 * 1024) {
+    return c.json({ error: 'Fichier trop volumineux (max 5 Mo)' }, 400)
+  }
+  const res = await c.env.DB.prepare(`
+    INSERT INTO restaurant_documents (
+      restaurant_id, type_document, nom_fichier, taille_octets, mime_type,
+      contenu_base64, url_externe, date_emission, date_expiration,
+      statut, uploaded_by, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?)
+  `).bind(
+    restaurant_id, type_document, nom_fichier, taille || null, mime_type || null,
+    contenu_base64 || null, url_externe || null, date_emission || null, date_expiration || null,
+    me.id, commentaire || null
+  ).run()
+  return c.json({ success: true, id: res.meta.last_row_id })
+})
+
+// DELETE /api/agent/documents/:id — supprime un document (uploadeur ou admin)
+app.delete('/documents/:id', async (c) => {
+  const me = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  const doc = await c.env.DB.prepare(`
+    SELECT d.*, r.agent_id FROM restaurant_documents d
+    JOIN restaurants r ON d.restaurant_id = r.id
+    WHERE d.id = ?
+  `).bind(id).first() as any
+  if (!doc) return c.json({ error: 'Document introuvable' }, 404)
+  const branchIds = await getBranchAgentIds(c.env.DB, me.id)
+  if (!branchIds.includes(doc.agent_id)) return c.json({ error: 'Accès refusé' }, 403)
+  await c.env.DB.prepare('DELETE FROM restaurant_documents WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
 })
 
 // ============================================================

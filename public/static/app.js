@@ -4429,6 +4429,52 @@ PAGES['a-restaurants'] = async (c) => {
       e.stopPropagation()
       agentUploadDocModal(parseInt(b.dataset.upload), b.dataset.docType, b.dataset.docLabel, () => loadTree())
     })
+    // Voir document (preview)
+    wrap.querySelectorAll('[data-view-doc-agent]').forEach(b => b.onclick = async (e) => {
+      e.stopPropagation()
+      try {
+        const { data } = await api.get('/agent/documents/' + b.dataset.viewDocAgent + '/contenu')
+        if (data.url_externe) { window.open(data.url_externe, '_blank'); return }
+        if (!data.contenu_base64) { toast('Document vide ou indisponible', 'error'); return }
+        const w = window.open('', '_blank')
+        const title = escapeHtml(data.nom_fichier || 'Document')
+        if (data.mime_type && data.mime_type.startsWith('image/')) {
+          w.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>body{margin:0;background:#1a1a1a;display:flex;align-items:center;justify-content:center;min-height:100vh}img{max-width:100%;max-height:100vh;box-shadow:0 4px 20px rgba(0,0,0,.5)}</style></head><body><img src="data:${data.mime_type};base64,${data.contenu_base64}" alt="${title}"/></body></html>`)
+        } else if (data.mime_type === 'application/pdf') {
+          w.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>body,html{margin:0;height:100%}</style></head><body><iframe src="data:application/pdf;base64,${data.contenu_base64}" style="width:100%;height:100vh;border:0"></iframe></body></html>`)
+        } else {
+          const a = document.createElement('a')
+          a.href = `data:${data.mime_type || 'application/octet-stream'};base64,${data.contenu_base64}`
+          a.download = data.nom_fichier || 'document'
+          a.click()
+          w.close()
+        }
+      } catch (err) { toast('Impossible d\'ouvrir le document', 'error') }
+    })
+    // Télécharger document
+    wrap.querySelectorAll('[data-download-doc-agent]').forEach(b => b.onclick = async (e) => {
+      e.stopPropagation()
+      try {
+        const { data } = await api.get('/agent/documents/' + b.dataset.downloadDocAgent + '/contenu')
+        if (data.url_externe) { window.open(data.url_externe, '_blank'); return }
+        if (!data.contenu_base64) { toast('Document vide ou indisponible', 'error'); return }
+        const a = document.createElement('a')
+        a.href = `data:${data.mime_type || 'application/octet-stream'};base64,${data.contenu_base64}`
+        a.download = data.nom_fichier || 'document'
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        toast('Téléchargement lancé')
+      } catch (err) { toast('Impossible de télécharger le document', 'error') }
+    })
+    // Supprimer document
+    wrap.querySelectorAll('[data-del-doc-agent]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation()
+      confirmDialog('Supprimer définitivement ce document ?', async () => {
+        try {
+          await api.delete('/agent/documents/' + b.dataset.delDocAgent)
+          toast('Document supprimé'); loadTree()
+        } catch (err) { toast(err.response?.data?.error || 'Erreur suppression', 'error') }
+      })
+    })
   }
 
   // Hooks
@@ -4540,17 +4586,34 @@ function renderRestoCard(r) {
         </div>
         <div>
           <div class="card-title" style="font-size:.95rem"><i class="fas fa-folder-open"></i> Documents</div>
-          ${['kbis','cni','rib','contrat_portefeuille'].map(t => {
-            const lab = { kbis:'KBIS', cni:'CNI gérant', rib:'RIB', contrat_portefeuille:'Contrat portefeuille' }[t]
-            const d = docs[t]
-            const fourni = d && d.fourni
-            const valide = d && d.valide
-            return `<div style="display:flex;align-items:center;gap:.5rem;padding:.35rem .5rem;border-radius:6px;background:var(--bg-soft);margin-bottom:.25rem">
-              <i class="fas fa-${fourni ? (valide ? 'circle-check' : 'hourglass-half') : 'file-circle-exclamation'}" style="color:${fourni ? (valide ? 'var(--primary)' : 'var(--accent)') : 'var(--danger)'}"></i>
-              <span style="flex:1">${lab}</span>
-              ${fourni
-                ? `<a class="btn btn-sm btn-secondary" href="/api/agent/documents/${d.id}/contenu" target="_blank" title="Voir / télécharger"><i class="fas fa-download"></i></a>`
-                : `<button class="btn btn-sm btn-primary" data-upload-doc="${r.id}" data-doc-type="${t}" data-doc-label="${escapeHtml(lab)}"><i class="fas fa-upload"></i></button>`}
+          ${[
+            { code: 'kbis', label: 'KBIS' },
+            { code: 'piece_identite', label: 'CNI gérant' },
+            { code: 'rib', label: 'RIB' },
+            { code: 'contrat', label: 'Contrat portefeuille' }
+          ].map(({ code, label }) => {
+            const d = docs[code]
+            const fichiers = (d && d.fichiers) || []
+            const fourni = fichiers.length > 0
+            const valide = d && d.valide > 0
+            const icon = fourni ? (valide ? 'circle-check' : 'hourglass-half') : 'file-circle-exclamation'
+            const color = fourni ? (valide ? 'var(--primary)' : 'var(--accent)') : 'var(--danger)'
+            return `<div style="padding:.35rem .5rem;border-radius:6px;background:var(--bg-soft);margin-bottom:.25rem">
+              <div style="display:flex;align-items:center;gap:.5rem">
+                <i class="fas fa-${icon}" style="color:${color}"></i>
+                <span style="flex:1">${label} ${fourni ? `<span class="text-muted" style="font-size:.75rem">(${fichiers.length})</span>` : ''}</span>
+                <button class="btn btn-sm btn-primary" data-upload-doc="${r.id}" data-doc-type="${code}" data-doc-label="${escapeHtml(label)}" title="Ajouter un fichier"><i class="fas fa-upload"></i></button>
+              </div>
+              ${fichiers.length ? `<div style="display:flex;flex-direction:column;gap:.2rem;margin-top:.3rem;padding-left:1.4rem">
+                ${fichiers.map(f => `<div style="display:flex;align-items:center;gap:.4rem;font-size:.78rem">
+                  <i class="fas fa-${(f.mime_type || '').startsWith('image/') ? 'file-image' : (f.mime_type === 'application/pdf') ? 'file-pdf' : 'file'}" style="color:var(--text-muted)"></i>
+                  <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(f.nom_fichier || '')}">${escapeHtml(f.nom_fichier || '')}</span>
+                  <span class="badge ${f.statut === 'valide' ? 'badge-success' : f.statut === 'rejete' ? 'badge-danger' : 'badge-warning'}" style="font-size:.6rem">${f.statut}</span>
+                  <button class="btn btn-sm btn-secondary" data-view-doc-agent="${f.id}" title="Voir"><i class="fas fa-eye"></i></button>
+                  <button class="btn btn-sm btn-secondary" data-download-doc-agent="${f.id}" title="Télécharger"><i class="fas fa-download"></i></button>
+                  <button class="btn btn-sm btn-danger" data-del-doc-agent="${f.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+                </div>`).join('')}
+              </div>` : ''}
             </div>`
           }).join('')}
           ${r.rib_manuel_ok ? `<div class="text-muted" style="font-size:.78rem;margin-top:.25rem"><i class="fas fa-check"></i> RIB renseigné manuellement (IBAN, BIC, banque)</div>` : ''}
