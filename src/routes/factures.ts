@@ -162,10 +162,16 @@ app.post('/agent/preview', async (c) => {
   const periode = parsePeriodeBody(body)
   if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
 
-  const lignes = await buildLignesFactureAgent(c.env.DB, user.id, periode.annee, periode.mois, periode.range)
+  // Filtres optionnels : restaurant_id, marque_id pour cibler la facture
+  const filters: any = {}
+  if (body.restaurant_id) filters.restaurant_id = Number(body.restaurant_id)
+  if (body.marque_id) filters.marque_id = Number(body.marque_id)
+
+  const lignes = await buildLignesFactureAgent(c.env.DB, user.id, periode.annee, periode.mois, periode.range, filters)
   const total = lignes.reduce((s, l) => s + l.montant_ht, 0)
   return c.json({
     lignes, total, nb_lignes: lignes.length,
+    filtres: filters,
     periode: { annee: periode.annee, mois: periode.mois, label: periode.label, type: periode.type, date_debut: periode.date_debut, date_fin: periode.date_fin }
   })
 })
@@ -202,8 +208,13 @@ app.post('/agent/create', async (c) => {
     return c.json({ error: `Une facture chevauche déjà cette période : ${conflit.numero} (${conflit.statut})` }, 400)
   }
 
+  // Filtres optionnels : restaurant_id, marque_id pour cibler la facture
+  const filters: any = {}
+  if (body.restaurant_id) filters.restaurant_id = Number(body.restaurant_id)
+  if (body.marque_id) filters.marque_id = Number(body.marque_id)
+
   // Construire les lignes
-  const lignes = await buildLignesFactureAgent(c.env.DB, user.id, periode.annee, periode.mois, periode.range)
+  const lignes = await buildLignesFactureAgent(c.env.DB, user.id, periode.annee, periode.mois, periode.range, filters)
   if (!lignes.length) return c.json({ error: 'Aucune commission à facturer pour cette période' }, 400)
   const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
 

@@ -218,14 +218,63 @@ export interface CommandeWithContext {
   marque_id: number
   marque_nom: string
   marque_is_portefeuille: number
+  marque_date_signature_portefeuille?: string | null
   restaurant_id: number
   restaurant_nom: string
   restaurant_is_portefeuille: number
+  restaurant_date_signature_portefeuille?: string | null
   tablette_sr_shop: number
   agent_id: number | null
   agent_niveau: number | null
   agent_parent_id: number | null
   agent_grand_parent_id: number | null
+}
+
+/**
+ * Détermine si une commande tombe sous le régime PORTEFEUILLE 100% agent.
+ *
+ * Règle métier (clarification utilisateur du 13 mai 2026) :
+ *   - Le portefeuille devient effectif à la DATE DE SIGNATURE du contrat
+ *     de portefeuille, pas à la date de création de la marque.
+ *   - Exemple : marque créée le 26 mai, sélectionnée comme portefeuille
+ *     le 29 juin → toutes les commandes < 29 juin = commissions normales
+ *     (DropEat + N+1/N+2), toutes les commandes ≥ 29 juin = 100% agent.
+ *   - Si le flag is_portefeuille_proprietaire est posé mais aucune date
+ *     de signature n'est renseignée → on conserve l'ancien comportement
+ *     (compatibilité ascendante : portefeuille effectif depuis toujours).
+ */
+export function isOrderUnderPortefeuille(cmd: {
+  date_commande: string
+  marque_is_portefeuille: number
+  marque_date_signature_portefeuille?: string | null
+  restaurant_is_portefeuille: number
+  restaurant_date_signature_portefeuille?: string | null
+}): boolean {
+  const margeFlag = !!cmd.marque_is_portefeuille
+  const restoFlag = !!cmd.restaurant_is_portefeuille
+  if (!margeFlag && !restoFlag) return false
+
+  const dateCmd = (cmd.date_commande || '').substring(0, 10) // YYYY-MM-DD
+  if (!dateCmd) return margeFlag || restoFlag
+
+  // Si signature marque définie, on respecte cette date
+  if (margeFlag) {
+    const dSign = cmd.marque_date_signature_portefeuille
+    if (dSign && dSign.length >= 10) {
+      return dateCmd >= dSign.substring(0, 10)
+    }
+    // Pas de date → comportement historique : portefeuille effectif partout
+    return true
+  }
+  // Sinon, c'est le resto qui est en portefeuille
+  if (restoFlag) {
+    const dSign = cmd.restaurant_date_signature_portefeuille
+    if (dSign && dSign.length >= 10) {
+      return dateCmd >= dSign.substring(0, 10)
+    }
+    return true
+  }
+  return false
 }
 
 export interface AgentCommissionDetail {
@@ -280,9 +329,9 @@ export function calculerCommissionsPeriode(
   const restoMap = new Map<number, any>()
 
   for (const cmd of commandes) {
-    // Une marque peut être Portefeuille même si le resto ne l'est pas (5e marque créée)
-    // Le restaurant peut être Portefeuille (5e resto apporté)
-    const isPortefeuille = !!(cmd.restaurant_is_portefeuille || cmd.marque_is_portefeuille)
+    // Le portefeuille n'est effectif qu'à partir de la date de signature
+    // du contrat (cf. règle métier 0010_portefeuille_signature_docs).
+    const isPortefeuille = isOrderUnderPortefeuille(cmd)
 
     const calc = calculerCommissionCommande({
       montant_commande: cmd.montant_brut,

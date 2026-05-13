@@ -86,6 +86,252 @@ app.get('/me', async (c) => {
 })
 
 // ============================================================
+// ARBORESCENCE COMPLÈTE — vue CRM commercial / MLM senior
+// GET /api/agent/mes-restaurants/tree?annee=&mois=&date_debut=&date_fin=
+//
+// Renvoie pour chaque restaurant de la branche :
+//   - identité complète (gérant, RIB manuel, etc.)
+//   - marques associées (avec statuts, accès Uber, tablette, CA, commissions)
+//   - sous-agents éventuellement liés (chaîne MLM)
+//   - checklist complète (KBIS, CNI, RIB, contrat, accès Uber, tablette, onboarding, validation)
+//   - documents fournis (count par type)
+//   - KPI : CA, commissions, marges, nb commandes, dernière activité
+//   - alertes : documents manquants, marques refusées, signature portefeuille
+// ============================================================
+app.get('/mes-restaurants/tree', async (c) => {
+  const me = c.get('user')
+  const branchIds = await getBranchAgentIds(c.env.DB, me.id)
+  const inClause = `(${branchIds.map(() => '?').join(',')})`
+
+  // Période optionnelle pour filtrer les KPI (par défaut : 12 derniers mois)
+  const dateDebut = c.req.query('date_debut') || null
+  const dateFin = c.req.query('date_fin') || null
+  let rangeDebut = dateDebut, rangeFin = dateFin
+  if (!rangeDebut || !rangeFin) {
+    const an = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+    const mo = c.req.query('mois') ? parseInt(c.req.query('mois')!) : null
+    if (mo) {
+      rangeDebut = `${an}-${String(mo).padStart(2, '0')}-01`
+      const lastDay = new Date(an, mo, 0).getDate()
+      rangeFin = `${an}-${String(mo).padStart(2, '0')}-${String(lastDay).padStart(2, '0')} 23:59:59`
+    } else {
+      // 12 derniers mois
+      const now = new Date()
+      const past = new Date(now.getFullYear() - 1, now.getMonth(), 1)
+      rangeDebut = past.toISOString().substring(0, 10)
+      rangeFin = now.toISOString().substring(0, 10) + ' 23:59:59'
+    }
+  }
+
+  // 1) Tous les restaurants de la branche avec leur fiche complète + KPI agrégés
+  const { results: restos } = await c.env.DB.prepare(`
+    SELECT r.*,
+      u.id as agent_uid, u.nom as agent_nom, u.prenom as agent_prenom, u.niveau as agent_niveau,
+      u.email as agent_email,
+      p.id as parent_uid, p.nom as parent_nom, p.prenom as parent_prenom,
+      (SELECT COUNT(*) FROM marques_virtuelles m WHERE m.restaurant_id = r.id) as nb_marques,
+      (SELECT COUNT(*) FROM marques_virtuelles m
+        WHERE m.restaurant_id = r.id AND m.is_portefeuille_proprietaire = 1) as nb_marques_portefeuille,
+      (SELECT COUNT(*) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        WHERE m.restaurant_id = r.id AND c.statut != 'annulee') as nb_commandes_total,
+      (SELECT COUNT(*) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        WHERE m.restaurant_id = r.id AND c.statut != 'annulee'
+          AND c.date_commande >= ? AND c.date_commande <= ?) as nb_commandes_periode,
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        WHERE m.restaurant_id = r.id AND c.statut != 'annulee') as ca_total,
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        WHERE m.restaurant_id = r.id AND c.statut != 'annulee'
+          AND c.date_commande >= ? AND c.date_commande <= ?) as ca_periode,
+      (SELECT COALESCE(SUM(c.commission_agent_montant)+SUM(c.commission_portefeuille_montant),0)
+        FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        WHERE m.restaurant_id = r.id AND c.statut != 'annulee'
+          AND c.date_commande >= ? AND c.date_commande <= ?) as commissions_periode,
+      (SELECT MAX(c.date_commande) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        WHERE m.restaurant_id = r.id AND c.statut != 'annulee') as derniere_commande
+    FROM restaurants r
+    LEFT JOIN users u ON r.agent_id = u.id
+    LEFT JOIN users p ON u.parent_id = p.id
+    WHERE r.agent_id IN ${inClause}
+    ORDER BY r.created_at DESC
+  `).bind(rangeDebut, rangeFin, rangeDebut, rangeFin, rangeDebut, rangeFin, ...branchIds).all() as any
+
+  const restoIds = (restos as any[]).map(r => r.id)
+  if (restoIds.length === 0) {
+    return c.json({ tree: [], stats: { nb_restos: 0, nb_marques: 0, nb_portefeuille: 0, ca_total: 0, commissions_total: 0 }, periode: { debut: rangeDebut, fin: rangeFin } })
+  }
+  const ph = restoIds.map(() => '?').join(',')
+
+  // 2) Toutes les marques + KPI
+  const { results: marques } = await c.env.DB.prepare(`
+    SELECT m.id, m.restaurant_id, m.nom, m.plateforme, m.uber_store_id,
+      m.rang_creation, m.is_portefeuille_proprietaire,
+      m.date_signature_portefeuille, m.date_lancement, m.actif, m.statut_marque,
+      m.uber_manager_email, m.uber_manager_url,
+      m.uber_orders_email, m.uber_orders_url,
+      m.tablette_fournie, m.tablette_serial,
+      m.commission_info, m.acces_operationnels,
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as nb_commandes_total,
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+        AND c.date_commande >= ? AND c.date_commande <= ?) as nb_commandes_periode,
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as ca_total,
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+        AND c.date_commande >= ? AND c.date_commande <= ?) as ca_periode,
+      (SELECT COALESCE(SUM(c.commission_agent_montant)+SUM(c.commission_portefeuille_montant),0)
+        FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+        AND c.date_commande >= ? AND c.date_commande <= ?) as commissions_periode,
+      (SELECT MAX(c.date_commande) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as derniere_commande
+    FROM marques_virtuelles m
+    WHERE m.restaurant_id IN (${ph})
+    ORDER BY m.rang_creation ASC, m.id ASC
+  `).bind(rangeDebut, rangeFin, rangeDebut, rangeFin, rangeDebut, rangeFin, ...restoIds).all() as any
+
+  const marquesMap: Record<number, any[]> = {}
+  for (const mm of marques as any[]) {
+    if (!marquesMap[mm.restaurant_id]) marquesMap[mm.restaurant_id] = []
+    marquesMap[mm.restaurant_id].push(mm)
+  }
+
+  // 3) Checklist complète par resto (statut_resto + items)
+  const { results: checks } = await c.env.DB.prepare(`
+    SELECT restaurant_id, code, libelle, obligatoire, statut, ressource_type, date_validation
+    FROM checklist_items
+    WHERE restaurant_id IN (${ph})
+    ORDER BY restaurant_id, obligatoire DESC, code
+  `).bind(...restoIds).all() as any
+  const checksMap: Record<number, any[]> = {}
+  for (const ci of checks as any[]) {
+    if (!checksMap[ci.restaurant_id]) checksMap[ci.restaurant_id] = []
+    checksMap[ci.restaurant_id].push(ci)
+  }
+
+  // 4) Documents : nb par type pour chaque resto
+  const { results: docs } = await c.env.DB.prepare(`
+    SELECT restaurant_id, type_document, statut, COUNT(*) as nb
+    FROM restaurant_documents
+    WHERE restaurant_id IN (${ph})
+    GROUP BY restaurant_id, type_document, statut
+  `).bind(...restoIds).all() as any
+  const docsMap: Record<number, Record<string, { fourni: number, valide: number }>> = {}
+  for (const d of docs as any[]) {
+    if (!docsMap[d.restaurant_id]) docsMap[d.restaurant_id] = {}
+    if (!docsMap[d.restaurant_id][d.type_document]) docsMap[d.restaurant_id][d.type_document] = { fourni: 0, valide: 0 }
+    docsMap[d.restaurant_id][d.type_document].fourni += d.nb
+    if (d.statut === 'valide') docsMap[d.restaurant_id][d.type_document].valide += d.nb
+  }
+
+  // 5) Sous-agents éventuels = agents de niveau > moi qui sont rattachés au resto via agent_id
+  //    Construit la chaîne MLM : me → ... → agent_id_resto
+  const tree = (restos as any[]).map(r => {
+    const restoMarques = marquesMap[r.id] || []
+    const checklist = checksMap[r.id] || []
+    const checklistOk = checklist.filter((x: any) => x.obligatoire && x.statut === 'valide').length
+    const checklistTotalObl = checklist.filter((x: any) => x.obligatoire).length
+    const docsByType = docsMap[r.id] || {}
+
+    // Compte des alertes / blocages
+    const docsManquants: string[] = []
+    for (const code of ['kbis', 'piece_identite', 'rib', 'contrat']) {
+      if (!docsByType[code] || docsByType[code].valide === 0) docsManquants.push(code)
+    }
+    // RIB : si pas de doc valide, on regarde si IBAN manuel renseigné
+    const ribManuelOk = !!(r.rib_iban && r.rib_iban.trim().length > 0)
+    if (docsManquants.includes('rib') && ribManuelOk) {
+      const idx = docsManquants.indexOf('rib')
+      if (idx >= 0) docsManquants.splice(idx, 1)
+    }
+
+    return {
+      ...r,
+      agent: r.agent_uid ? {
+        id: r.agent_uid, nom: r.agent_nom, prenom: r.agent_prenom,
+        email: r.agent_email, niveau: r.agent_niveau,
+        parent: r.parent_uid ? {
+          id: r.parent_uid, nom: r.parent_nom, prenom: r.parent_prenom
+        } : null
+      } : null,
+      marques: restoMarques,
+      checklist,
+      checklist_progression: {
+        ok: checklistOk,
+        total_obligatoire: checklistTotalObl,
+        pct: checklistTotalObl ? Math.round((checklistOk / checklistTotalObl) * 100) : 0
+      },
+      documents: docsByType,
+      rib_manuel_ok: ribManuelOk,
+      docs_manquants: docsManquants,
+      alertes: {
+        nb_docs_manquants: docsManquants.length,
+        bloque_signature: docsManquants.length > 0,
+        nb_marques_refusees: restoMarques.filter((m: any) => m.statut_marque === 'refusee').length,
+        nb_marques_en_attente: restoMarques.filter((m: any) => m.statut_marque === 'en_attente' || m.statut_marque === 'en_creation').length
+      }
+    }
+  })
+
+  // Stats globales
+  const stats = {
+    nb_restos: tree.length,
+    nb_marques: (marques as any[]).length,
+    nb_portefeuille: (marques as any[]).filter((m: any) => m.is_portefeuille_proprietaire).length,
+    ca_total_periode: tree.reduce((s, r) => s + (r.ca_periode || 0), 0),
+    ca_total_global: tree.reduce((s, r) => s + (r.ca_total || 0), 0),
+    commissions_periode: tree.reduce((s, r) => s + (r.commissions_periode || 0), 0),
+    nb_docs_manquants_total: tree.reduce((s, r) => s + (r.alertes.nb_docs_manquants || 0), 0)
+  }
+
+  return c.json({ tree, stats, periode: { debut: rangeDebut, fin: rangeFin } })
+})
+
+// ============================================================
+// PORTEFEUILLE 100% — vue dédiée des marques/restos portefeuille de l'agent
+// GET /api/agent/portefeuille?annee=&mois=
+// ============================================================
+app.get('/portefeuille', async (c) => {
+  const me = c.get('user')
+  const branchIds = await getBranchAgentIds(c.env.DB, me.id)
+  const inClause = `(${branchIds.map(() => '?').join(',')})`
+
+  // Période (par défaut : mois courant)
+  const annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+  const mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+  const debut = `${annee}-${String(mois).padStart(2, '0')}-01`
+  const lastDay = new Date(annee, mois, 0).getDate()
+  const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(lastDay).padStart(2, '0')} 23:59:59`
+
+  // Marques portefeuille de la branche
+  const { results: marques } = await c.env.DB.prepare(`
+    SELECT m.id, m.nom, m.plateforme, m.uber_store_id,
+      m.is_portefeuille_proprietaire, m.date_signature_portefeuille,
+      r.id as restaurant_id, r.nom as restaurant_nom, r.ville,
+      r.agent_id, u.nom as agent_nom, u.prenom as agent_prenom,
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+        AND c.date_commande >= ? AND c.date_commande <= ?) as nb_commandes_periode,
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+        AND c.date_commande >= ? AND c.date_commande <= ?) as ca_periode,
+      (SELECT COALESCE(SUM(c.commission_portefeuille_montant),0)
+        FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+        AND c.date_commande >= ? AND c.date_commande <= ?) as commissions_portefeuille_periode,
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as nb_commandes_total,
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as ca_total
+    FROM marques_virtuelles m
+    JOIN restaurants r ON m.restaurant_id = r.id
+    LEFT JOIN users u ON r.agent_id = u.id
+    WHERE r.agent_id IN ${inClause}
+      AND m.is_portefeuille_proprietaire = 1
+    ORDER BY ca_periode DESC, m.nom
+  `).bind(debut, fin, debut, fin, debut, fin, ...branchIds).all() as any
+
+  const stats = {
+    nb_marques_portefeuille: (marques as any[]).length,
+    ca_periode: (marques as any[]).reduce((s: number, m: any) => s + (m.ca_periode || 0), 0),
+    commissions_periode: (marques as any[]).reduce((s: number, m: any) => s + (m.commissions_portefeuille_periode || 0), 0),
+    nb_commandes_periode: (marques as any[]).reduce((s: number, m: any) => s + (m.nb_commandes_periode || 0), 0)
+  }
+
+  return c.json({ marques_portefeuille: marques, stats, periode: { annee, mois, debut, fin } })
+})
+
+// ============================================================
 // MES RESTAURANTS (les miens + ceux de ma branche)
 // ============================================================
 app.get('/restaurants', async (c) => {
@@ -127,8 +373,13 @@ app.get('/restaurants/:id', async (c) => {
 app.post('/restaurants', async (c) => {
   const me = c.get('user')
   const data = await c.req.json()
-  const { nom, raison_sociale, siret, adresse, code_postal, ville, pays, telephone, email,
-    contact_nom, date_signature, date_lancement, tablette_sr_shop, notes, agent_id } = data
+  const {
+    nom, raison_sociale, siret, adresse, code_postal, ville, pays, telephone, email,
+    contact_nom, date_signature, date_lancement, tablette_sr_shop, notes, agent_id,
+    // Nouveaux champs : gérant + RIB manuel
+    gerant_nom, gerant_prenom, gerant_telephone, gerant_email,
+    rib_titulaire, rib_iban, rib_bic, rib_banque_nom, rib_references
+  } = data
   if (!nom) return c.json({ error: 'Nom requis' }, 400)
 
   // L'agent peut affecter le resto à lui-même OU à un de ses sous-agents
@@ -138,13 +389,39 @@ app.post('/restaurants', async (c) => {
 
   const r = await c.env.DB.prepare(`
     INSERT INTO restaurants (nom, raison_sociale, siret, adresse, code_postal, ville, pays, telephone, email,
-      contact_nom, agent_id, date_signature, date_lancement, tablette_sr_shop, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      contact_nom, agent_id, date_signature, date_lancement, tablette_sr_shop, notes,
+      gerant_nom, gerant_prenom, gerant_telephone, gerant_email,
+      rib_titulaire, rib_iban, rib_bic, rib_banque_nom, rib_references)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(nom, raison_sociale || null, siret || null, adresse || null, code_postal || null, ville || null,
     pays || 'France', telephone || null, email || null, contact_nom || null, targetAgentId,
-    date_signature || null, date_lancement || null, tablette_sr_shop ? 1 : 0, notes || null).run()
+    date_signature || null, date_lancement || null, tablette_sr_shop ? 1 : 0, notes || null,
+    gerant_nom || null, gerant_prenom || null, gerant_telephone || null, gerant_email || null,
+    rib_titulaire || null, rib_iban || null, rib_bic || null, rib_banque_nom || null, rib_references || null
+  ).run()
   await recalculerPortefeuilleAgent(c.env.DB, targetAgentId)
-  return c.json({ success: true, id: r.meta.last_row_id })
+
+  // Pré-créer la checklist standard pour ce nouveau resto
+  const newId = r.meta.last_row_id as number
+  const checklistItems = [
+    ['kbis', 'Extrait KBIS', 1, 'document'],
+    ['piece_identite', 'CNI / Pièce d\'identité', 1, 'document'],
+    ['rib', 'RIB / IBAN', 1, 'document'],
+    ['contrat', 'Contrat signé DropEat', 1, 'document'],
+    ['acces_uber_manager', 'Accès Uber Eats Manager', 1, 'compte_plateforme'],
+    ['acces_uber_orders', 'Accès Uber Eats Orders / Tablette', 1, 'compte_plateforme'],
+    ['tablette', 'Tablette de prise de commandes', 0, 'champ_resto'],
+    ['onboarding', 'Onboarding terminé', 1, 'champ_resto'],
+    ['validation_admin', 'Validation administrative', 1, 'champ_resto']
+  ]
+  for (const [code, libelle, oblig, restype] of checklistItems) {
+    await c.env.DB.prepare(`
+      INSERT OR IGNORE INTO checklist_items (restaurant_id, code, libelle, obligatoire, statut, ressource_type)
+      VALUES (?, ?, ?, ?, 'non_renseigne', ?)
+    `).bind(newId, code, libelle, oblig, restype).run().catch(() => {})
+  }
+
+  return c.json({ success: true, id: newId })
 })
 
 app.put('/restaurants/:id', async (c) => {
@@ -155,19 +432,49 @@ app.put('/restaurants/:id', async (c) => {
   if (!old || !branchIds.includes(old.agent_id)) return c.json({ error: 'Accès refusé' }, 403)
 
   const data = await c.req.json()
-  const { nom, raison_sociale, siret, adresse, code_postal, ville, pays, telephone, email,
-    contact_nom, date_signature, date_lancement, tablette_sr_shop, actif, notes, agent_id } = data
+  const {
+    nom, raison_sociale, siret, adresse, code_postal, ville, pays, telephone, email,
+    contact_nom, date_signature, date_lancement, tablette_sr_shop, actif, notes, agent_id,
+    gerant_nom, gerant_prenom, gerant_telephone, gerant_email,
+    rib_titulaire, rib_iban, rib_bic, rib_banque_nom, rib_references
+  } = data
   const targetAgentId = agent_id || old.agent_id
   if (!branchIds.includes(targetAgentId)) return c.json({ error: 'Réassignation hors branche interdite' }, 403)
 
-  await c.env.DB.prepare(`
-    UPDATE restaurants SET nom = ?, raison_sociale = ?, siret = ?, adresse = ?, code_postal = ?, ville = ?, pays = ?,
-      telephone = ?, email = ?, contact_nom = ?, agent_id = ?, date_signature = ?, date_lancement = ?,
-      tablette_sr_shop = ?, actif = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-  `).bind(nom, raison_sociale || null, siret || null, adresse || null, code_postal || null, ville || null,
-    pays || 'France', telephone || null, email || null, contact_nom || null, targetAgentId,
-    date_signature || null, date_lancement || null, tablette_sr_shop ? 1 : 0,
-    actif !== undefined ? actif : 1, notes || null, id).run()
+  // Construction dynamique : on ne met à jour que les champs présents dans data
+  const updates: string[] = []
+  const params: any[] = []
+  const setField = (col: string, val: any) => { updates.push(`${col} = ?`); params.push(val === undefined ? null : (val === '' ? null : val)) }
+  setField('nom', nom)
+  setField('raison_sociale', raison_sociale)
+  setField('siret', siret)
+  setField('adresse', adresse)
+  setField('code_postal', code_postal)
+  setField('ville', ville)
+  setField('pays', pays || 'France')
+  setField('telephone', telephone)
+  setField('email', email)
+  setField('contact_nom', contact_nom)
+  setField('agent_id', targetAgentId)
+  setField('date_signature', date_signature)
+  setField('date_lancement', date_lancement)
+  updates.push('tablette_sr_shop = ?'); params.push(tablette_sr_shop ? 1 : 0)
+  updates.push('actif = ?'); params.push(actif !== undefined ? (actif ? 1 : 0) : 1)
+  setField('notes', notes)
+  // Champs étendus (peuvent être undefined si on n'envoie qu'une partie du form)
+  if (gerant_nom !== undefined) setField('gerant_nom', gerant_nom)
+  if (gerant_prenom !== undefined) setField('gerant_prenom', gerant_prenom)
+  if (gerant_telephone !== undefined) setField('gerant_telephone', gerant_telephone)
+  if (gerant_email !== undefined) setField('gerant_email', gerant_email)
+  if (rib_titulaire !== undefined) setField('rib_titulaire', rib_titulaire)
+  if (rib_iban !== undefined) setField('rib_iban', rib_iban)
+  if (rib_bic !== undefined) setField('rib_bic', rib_bic)
+  if (rib_banque_nom !== undefined) setField('rib_banque_nom', rib_banque_nom)
+  if (rib_references !== undefined) setField('rib_references', rib_references)
+  updates.push('updated_at = CURRENT_TIMESTAMP')
+  params.push(id)
+
+  await c.env.DB.prepare(`UPDATE restaurants SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run()
 
   if (old.agent_id !== targetAgentId) {
     await recalculerPortefeuilleAgent(c.env.DB, old.agent_id)
@@ -199,12 +506,31 @@ app.post('/restaurants/:id/marques', async (c) => {
   const r = await c.env.DB.prepare('SELECT agent_id FROM restaurants WHERE id = ?').bind(id).first() as any
   if (!r || !branchIds.includes(r.agent_id)) return c.json({ error: 'Accès refusé' }, 403)
 
-  const { nom, uber_store_id, plateforme, date_lancement, notes } = await c.req.json()
+  const {
+    nom, uber_store_id, plateforme, date_lancement, notes,
+    uber_manager_email, uber_manager_password, uber_manager_url,
+    uber_orders_email, uber_orders_password, uber_orders_url,
+    tablette_fournie, tablette_serial, tablette_notes,
+    commission_info, acces_operationnels, statut_marque
+  } = await c.req.json()
   if (!nom) return c.json({ error: 'Nom requis' }, 400)
+
   const res = await c.env.DB.prepare(`
-    INSERT INTO marques_virtuelles (restaurant_id, nom, uber_store_id, plateforme, date_lancement, notes)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(id, nom, uber_store_id || null, plateforme || 'uber_eats', date_lancement || null, notes || null).run()
+    INSERT INTO marques_virtuelles (
+      restaurant_id, nom, uber_store_id, plateforme, date_lancement, notes,
+      uber_manager_email, uber_manager_password, uber_manager_url,
+      uber_orders_email, uber_orders_password, uber_orders_url,
+      tablette_fournie, tablette_serial, tablette_notes,
+      commission_info, acces_operationnels, statut_marque
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    id, nom, uber_store_id || null, plateforme || 'uber_eats', date_lancement || null, notes || null,
+    uber_manager_email || null, uber_manager_password || null, uber_manager_url || null,
+    uber_orders_email || null, uber_orders_password || null, uber_orders_url || null,
+    tablette_fournie ? 1 : 0, tablette_serial || null, tablette_notes || null,
+    commission_info || null, acces_operationnels || null, statut_marque || 'en_creation'
+  ).run()
   await recalculerPortefeuilleMarques(c.env.DB, id)
   return c.json({ success: true, id: res.meta.last_row_id })
 })
@@ -218,12 +544,29 @@ app.put('/marques/:id', async (c) => {
   `).bind(id).first() as any
   if (!m || !branchIds.includes(m.agent_id)) return c.json({ error: 'Accès refusé' }, 403)
 
-  const { nom, uber_store_id, plateforme, date_lancement, actif, notes } = await c.req.json()
-  await c.env.DB.prepare(`
-    UPDATE marques_virtuelles SET nom = ?, uber_store_id = ?, plateforme = ?, date_lancement = ?,
-      actif = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-  `).bind(nom, uber_store_id || null, plateforme || 'uber_eats', date_lancement || null,
-    actif !== undefined ? actif : 1, notes || null, id).run()
+  const data = await c.req.json()
+  // Champs gérables côté agent (whitelist)
+  const allowed = [
+    'nom', 'uber_store_id', 'plateforme', 'date_lancement', 'actif', 'notes',
+    'uber_manager_email', 'uber_manager_password', 'uber_manager_url',
+    'uber_orders_email', 'uber_orders_password', 'uber_orders_url',
+    'tablette_fournie', 'tablette_serial', 'tablette_notes',
+    'commission_info', 'acces_operationnels', 'statut_marque'
+  ]
+  const updates: string[] = []
+  const params: any[] = []
+  for (const k of allowed) {
+    if (Object.prototype.hasOwnProperty.call(data, k)) {
+      updates.push(`${k} = ?`)
+      let v = data[k]
+      if (k === 'tablette_fournie' || k === 'actif') v = v ? 1 : 0
+      params.push(v === '' ? null : v)
+    }
+  }
+  if (!updates.length) return c.json({ error: 'Aucun champ à mettre à jour' }, 400)
+  updates.push('updated_at = CURRENT_TIMESTAMP')
+  params.push(id)
+  await c.env.DB.prepare(`UPDATE marques_virtuelles SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run()
   await recalculerPortefeuilleMarques(c.env.DB, m.restaurant_id)
   return c.json({ success: true })
 })
@@ -364,8 +707,12 @@ app.get('/commissions', async (c) => {
 
   const { results: cmds } = await c.env.DB.prepare(`
     SELECT c.id, c.date_commande, c.montant_brut,
-      m.id as marque_id, m.nom as marque_nom, m.is_portefeuille_proprietaire as marque_is_portefeuille,
-      r.id as restaurant_id, r.nom as restaurant_nom, r.is_portefeuille_proprietaire as restaurant_is_portefeuille,
+      m.id as marque_id, m.nom as marque_nom,
+      m.is_portefeuille_proprietaire as marque_is_portefeuille,
+      m.date_signature_portefeuille as marque_date_signature_portefeuille,
+      r.id as restaurant_id, r.nom as restaurant_nom,
+      r.is_portefeuille_proprietaire as restaurant_is_portefeuille,
+      r.date_signature_portefeuille as restaurant_date_signature_portefeuille,
       r.tablette_sr_shop, r.agent_id,
       u.niveau as agent_niveau, u.parent_id as agent_parent_id, u2.parent_id as agent_grand_parent_id
     FROM commandes c

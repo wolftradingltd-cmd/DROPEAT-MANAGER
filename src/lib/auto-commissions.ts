@@ -7,7 +7,7 @@
 // - Sauvegarde snapshot dans commissions_calculees pour audit + cache
 // ============================================================
 
-import { getPaliers, calculerCommissionsPeriode, calculerCommissionCommande, type CommandeWithContext } from './commissions'
+import { getPaliers, calculerCommissionsPeriode, calculerCommissionCommande, isOrderUnderPortefeuille, type CommandeWithContext } from './commissions'
 
 export interface AutoCalcResult {
   periode: { annee: number, mois: number }
@@ -49,8 +49,10 @@ async function fetchCommandesPeriode(
       c.id, c.date_commande, c.montant_brut,
       m.id as marque_id, m.nom as marque_nom,
       m.is_portefeuille_proprietaire as marque_is_portefeuille,
+      m.date_signature_portefeuille as marque_date_signature_portefeuille,
       r.id as restaurant_id, r.nom as restaurant_nom,
       r.is_portefeuille_proprietaire as restaurant_is_portefeuille,
+      r.date_signature_portefeuille as restaurant_date_signature_portefeuille,
       r.tablette_sr_shop,
       r.agent_id,
       u.niveau as agent_niveau,
@@ -144,7 +146,8 @@ export async function recalculerCommissionsPeriode(
 
   // ===== TRAÇABILITÉ 100% : persister la facturation + commission par commande =====
   for (const cmd of commandes) {
-    const isPortefeuille = !!((cmd as any).restaurant_is_portefeuille || (cmd as any).marque_is_portefeuille)
+    // Portefeuille effectif uniquement à partir de la date de signature du contrat
+    const isPortefeuille = isOrderUnderPortefeuille(cmd as any)
     const tablette = !!(cmd as any).tablette_sr_shop
     const calc = calculerCommissionCommande({
       montant_commande: cmd.montant_brut,

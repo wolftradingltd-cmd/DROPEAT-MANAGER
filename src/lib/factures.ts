@@ -164,11 +164,15 @@ export async function buildLignesFactureAgent(
   agentId: number,
   annee: number,
   mois: number,
-  range?: { debut: string; fin: string }
+  range?: { debut: string; fin: string },
+  filters?: { restaurant_id?: number; marque_id?: number }
 ): Promise<LigneCommissionAgent[]> {
   const { debut, fin } = range
     ? { debut: range.debut, fin: range.fin }
     : resolvePeriode({ annee, mois })
+
+  const restoFilter = filters?.restaurant_id ? Number(filters.restaurant_id) : null
+  const marqueFilter = filters?.marque_id ? Number(filters.marque_id) : null
 
   const lignes: LigneCommissionAgent[] = []
 
@@ -176,6 +180,11 @@ export async function buildLignesFactureAgent(
   //    ⚠️ EXCLUSION : les commandes en portefeuille propriétaire (5e resto OU 5e marque)
   //    NE figurent PAS sur la facture agent→DropEat.
   //    Elles sont facturées DIRECTEMENT au restaurant à 100% (facture agent→resto).
+  //    + filtres optionnels resto_id / marque_id (pour facture ciblée)
+  const propreSqlExtra: string[] = []
+  const propreParams: any[] = [debut, fin, agentId]
+  if (restoFilter) { propreSqlExtra.push('AND r.id = ?'); propreParams.push(restoFilter) }
+  if (marqueFilter) { propreSqlExtra.push('AND m.id = ?'); propreParams.push(marqueFilter) }
   const { results: mesMarques } = await db.prepare(`
     SELECT
       m.id as marque_id, m.nom as marque_nom,
@@ -190,9 +199,10 @@ export async function buildLignesFactureAgent(
       AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
       AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
     WHERE r.agent_id = ?
+      ${propreSqlExtra.join(' ')}
     GROUP BY m.id
     HAVING comm_propre > 0
-  `).bind(debut, fin, agentId).all() as any
+  `).bind(...propreParams).all() as any
 
   for (const m of mesMarques as any[]) {
     lignes.push({
@@ -209,7 +219,9 @@ export async function buildLignesFactureAgent(
 
   // 2) Commissions N+1 sur ventes des filleuls directs (groupées par filleul)
   //    ⚠️ EXCLUSION : commandes en portefeuille du filleul (5e resto/marque) → pas de remontée N+1
-  const { results: n1 } = await db.prepare(`
+  //    Si filtre resto/marque spécifique → skip (les lignes N+1/N+2 ne sont pas par resto)
+  const skipN1N2 = !!(restoFilter || marqueFilter)
+  const { results: n1 } = skipN1N2 ? { results: [] } : await db.prepare(`
     SELECT
       uChild.id as agent_id, uChild.nom, uChild.prenom,
       COUNT(c.id) as nb_commandes,
@@ -241,7 +253,7 @@ export async function buildLignesFactureAgent(
 
   // 3) Commissions N+2 sur ventes des sous-filleuls
   //    ⚠️ EXCLUSION : commandes en portefeuille du sous-filleul → pas de remontée N+2
-  const { results: n2 } = await db.prepare(`
+  const { results: n2 } = skipN1N2 ? { results: [] } : await db.prepare(`
     SELECT
       uGrand.id as agent_id, uGrand.nom, uGrand.prenom,
       uChild.prenom as via_prenom, uChild.nom as via_nom,

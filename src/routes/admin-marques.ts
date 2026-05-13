@@ -136,7 +136,14 @@ app.get('/:id', async (c) => {
 // ============================================================
 app.post('/', async (c) => {
   const data = await c.req.json()
-  const { restaurant_id, nom, uber_store_id, plateforme, date_lancement, notes, is_portefeuille_proprietaire } = data
+  const {
+    restaurant_id, nom, uber_store_id, plateforme, date_lancement, notes,
+    is_portefeuille_proprietaire, date_signature_portefeuille,
+    uber_manager_email, uber_manager_password, uber_manager_url,
+    uber_orders_email, uber_orders_password, uber_orders_url,
+    tablette_fournie, tablette_serial, tablette_notes,
+    commission_info, acces_operationnels, statut_marque
+  } = data
 
   if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
   if (!nom || !nom.trim()) return c.json({ error: 'Nom requis' }, 400)
@@ -149,8 +156,13 @@ app.post('/', async (c) => {
   const r = await c.env.DB.prepare(`
     INSERT INTO marques_virtuelles
       (restaurant_id, nom, uber_store_id, plateforme, date_lancement, notes,
-       is_portefeuille_proprietaire, actif, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       is_portefeuille_proprietaire, date_signature_portefeuille,
+       uber_manager_email, uber_manager_password, uber_manager_url,
+       uber_orders_email, uber_orders_password, uber_orders_url,
+       tablette_fournie, tablette_serial, tablette_notes,
+       commission_info, acces_operationnels, statut_marque,
+       actif, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `).bind(
     restaurant_id,
     nom.trim(),
@@ -158,7 +170,20 @@ app.post('/', async (c) => {
     plateforme || 'uber_eats',
     date_lancement || null,
     notes || null,
-    is_portefeuille_proprietaire ? 1 : 0
+    is_portefeuille_proprietaire ? 1 : 0,
+    date_signature_portefeuille || null,
+    uber_manager_email || null,
+    uber_manager_password || null,
+    uber_manager_url || null,
+    uber_orders_email || null,
+    uber_orders_password || null,
+    uber_orders_url || null,
+    tablette_fournie ? 1 : 0,
+    tablette_serial || null,
+    tablette_notes || null,
+    commission_info || null,
+    acces_operationnels || null,
+    statut_marque || 'en_creation'
   ).run()
 
   const newId = r.meta.last_row_id as number
@@ -189,7 +214,21 @@ app.put('/:id', async (c) => {
   // Champs autorisés
   const updates: string[] = []
   const params: any[] = []
-  const allowed = ['nom', 'uber_store_id', 'plateforme', 'date_lancement', 'actif', 'notes']
+  const allowed = [
+    'nom', 'uber_store_id', 'plateforme', 'date_lancement', 'actif', 'notes',
+    // Acces Uber Eats Manager
+    'uber_manager_email', 'uber_manager_password', 'uber_manager_url',
+    // Acces Uber Eats Orders / Tablette
+    'uber_orders_email', 'uber_orders_password', 'uber_orders_url',
+    // Tablette
+    'tablette_fournie', 'tablette_serial', 'tablette_notes',
+    // Commissions et operationnel
+    'commission_info', 'acces_operationnels',
+    // Statut marque
+    'statut_marque',
+    // Portefeuille (signature)
+    'is_portefeuille_proprietaire', 'date_signature_portefeuille'
+  ]
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(data, k)) {
       updates.push(`${k} = ?`)

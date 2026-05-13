@@ -146,12 +146,18 @@ app.get('/:id', async (c) => {
   return c.json({ restaurant: r, marques })
 })
 
-// POST /api/admin/restaurants - Créer
+// POST /api/admin/restaurants - Créer (avec gérant + RIB manuel + signature portefeuille)
 app.post('/', async (c) => {
   const data = await c.req.json()
-  const { 
+  const {
     nom, raison_sociale, siret, adresse, code_postal, ville, pays, telephone, email,
-    contact_nom, agent_id, date_signature, date_lancement, tablette_sr_shop, notes 
+    contact_nom, agent_id, date_signature, date_lancement, tablette_sr_shop, notes,
+    // Gérant
+    gerant_nom, gerant_prenom, gerant_telephone, gerant_email,
+    // RIB manuel
+    rib_titulaire, rib_iban, rib_bic, rib_banque_nom, rib_references,
+    // Portefeuille (signature)
+    is_portefeuille_proprietaire, date_signature_portefeuille
   } = data
 
   if (!nom) return c.json({ error: 'Nom requis' }, 400)
@@ -159,17 +165,42 @@ app.post('/', async (c) => {
   const result = await c.env.DB.prepare(`
     INSERT INTO restaurants (
       nom, raison_sociale, siret, adresse, code_postal, ville, pays, telephone, email,
-      contact_nom, agent_id, date_signature, date_lancement, tablette_sr_shop, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      contact_nom, agent_id, date_signature, date_lancement, tablette_sr_shop, notes,
+      gerant_nom, gerant_prenom, gerant_telephone, gerant_email,
+      rib_titulaire, rib_iban, rib_bic, rib_banque_nom, rib_references,
+      is_portefeuille_proprietaire, date_signature_portefeuille
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     nom, raison_sociale || null, siret || null, adresse || null,
     code_postal || null, ville || null, pays || 'France',
     telephone || null, email || null, contact_nom || null,
     agent_id || null, date_signature || null, date_lancement || null,
-    tablette_sr_shop ? 1 : 0, notes || null
+    tablette_sr_shop ? 1 : 0, notes || null,
+    gerant_nom || null, gerant_prenom || null, gerant_telephone || null, gerant_email || null,
+    rib_titulaire || null, rib_iban || null, rib_bic || null, rib_banque_nom || null, rib_references || null,
+    is_portefeuille_proprietaire ? 1 : 0, date_signature_portefeuille || null
   ).run()
 
   const newId = result.meta.last_row_id as number
+
+  // Pré-création de la checklist standard (KBIS/CNI/RIB/contrat/accès/tablette/onboarding/validation)
+  const checklistStd = [
+    { code: 'kbis', libelle: 'KBIS', obligatoire: 1 },
+    { code: 'cni', libelle: 'Pièce d\'identité du gérant (CNI)', obligatoire: 1 },
+    { code: 'rib', libelle: 'RIB (upload ou saisie manuelle)', obligatoire: 1 },
+    { code: 'contrat_portefeuille', libelle: 'Contrat de portefeuille', obligatoire: 0 },
+    { code: 'acces_uber_manager', libelle: 'Accès Uber Eats Manager', obligatoire: 1 },
+    { code: 'acces_uber_orders', libelle: 'Accès Uber Eats Orders/Tablette', obligatoire: 1 },
+    { code: 'tablette', libelle: 'Tablette fournie', obligatoire: 0 },
+    { code: 'onboarding', libelle: 'Onboarding restaurant', obligatoire: 1 },
+    { code: 'validation_admin', libelle: 'Validation administrateur', obligatoire: 1 }
+  ]
+  for (const item of checklistStd) {
+    await c.env.DB.prepare(`
+      INSERT OR IGNORE INTO checklist_items (restaurant_id, code, libelle, obligatoire, statut)
+      VALUES (?, ?, ?, ?, 'a_faire')
+    `).bind(newId, item.code, item.libelle, item.obligatoire).run()
+  }
 
   // Recalculer les rangs et qualifier dans la tranche ouverte de l'agent
   if (agent_id) {
@@ -190,32 +221,44 @@ app.post('/', async (c) => {
   return c.json({ success: true, id: newId })
 })
 
-// PUT /api/admin/restaurants/:id
+// PUT /api/admin/restaurants/:id (dynamic - accepte tous les nouveaux champs gérant/RIB/portefeuille)
 app.put('/:id', async (c) => {
   const id = c.req.param('id')
   const data = await c.req.json()
   const oldResto = await c.env.DB.prepare('SELECT agent_id FROM restaurants WHERE id = ?').bind(id).first() as any
   const oldAgentId = oldResto?.agent_id
 
-  const {
-    nom, raison_sociale, siret, adresse, code_postal, ville, pays, telephone, email,
-    contact_nom, agent_id, date_signature, date_lancement, tablette_sr_shop, actif, notes
-  } = data
+  const allowed = [
+    'nom', 'raison_sociale', 'siret', 'adresse', 'code_postal', 'ville', 'pays',
+    'telephone', 'email', 'contact_nom', 'agent_id', 'date_signature', 'date_lancement',
+    'tablette_sr_shop', 'actif', 'notes',
+    // Gérant
+    'gerant_nom', 'gerant_prenom', 'gerant_telephone', 'gerant_email',
+    // RIB manuel
+    'rib_titulaire', 'rib_iban', 'rib_bic', 'rib_banque_nom', 'rib_references',
+    // Portefeuille
+    'is_portefeuille_proprietaire', 'date_signature_portefeuille'
+  ]
+  const updates: string[] = []
+  const params: any[] = []
+  for (const k of allowed) {
+    if (Object.prototype.hasOwnProperty.call(data, k)) {
+      let v: any = (data as any)[k]
+      if (v === '') v = null
+      if (k === 'tablette_sr_shop' || k === 'is_portefeuille_proprietaire') v = v ? 1 : 0
+      updates.push(`${k} = ?`)
+      params.push(v)
+    }
+  }
+  // Le champ "agent_id" est extrait pour gérer la tranche
+  const agent_id = Object.prototype.hasOwnProperty.call(data, 'agent_id') ? (data.agent_id || null) : oldAgentId
 
-  await c.env.DB.prepare(`
-    UPDATE restaurants SET
-      nom = ?, raison_sociale = ?, siret = ?, adresse = ?, code_postal = ?, ville = ?, pays = ?,
-      telephone = ?, email = ?, contact_nom = ?, agent_id = ?, date_signature = ?, date_lancement = ?,
-      tablette_sr_shop = ?, actif = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).bind(
-    nom, raison_sociale || null, siret || null, adresse || null,
-    code_postal || null, ville || null, pays || 'France',
-    telephone || null, email || null, contact_nom || null,
-    agent_id || null, date_signature || null, date_lancement || null,
-    tablette_sr_shop ? 1 : 0,
-    actif !== undefined ? actif : 1, notes || null, id
-  ).run()
+  if (!updates.length) return c.json({ error: 'Aucun champ à mettre à jour' }, 400)
+  updates.push('updated_at = CURRENT_TIMESTAMP')
+  params.push(id)
+  await c.env.DB.prepare(
+    `UPDATE restaurants SET ${updates.join(', ')} WHERE id = ?`
+  ).bind(...params).run()
 
   // Si changement d'agent : dé-qualifier de l'ancien, qualifier dans le nouveau
   if (oldAgentId !== agent_id) {

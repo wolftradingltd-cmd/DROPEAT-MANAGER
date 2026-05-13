@@ -17,6 +17,9 @@ const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>()
 app.use('*', requireAuth)
 
 // GET /api/admin/attribution/eligibles - Liste des marques candidates pour l'agent
+// Règle métier : l'agent ne peut choisir QUE parmi les marques de SA TRANCHE OUVERTE COURANTE
+// (les marques 1, 2, 3, 4 déjà qualifiées dans cette tranche). Les marques d'anciennes
+// tranches clôturées ou hors tranche ouverte ne sont pas visibles.
 app.get('/eligibles', async (c) => {
   const user = c.get('user')
   const agent_id = user.role === 'superadmin'
@@ -24,25 +27,65 @@ app.get('/eligibles', async (c) => {
     : user.id
   if (!agent_id) return c.json({ error: 'agent_id requis' }, 400)
 
-  // Marques de l'agent NON encore portefeuille NON encore comptabilisées en tranche
+  // 1) Tranche marque OUVERTE de l'agent (s'il en a une)
+  const trancheOuverte = await c.env.DB.prepare(`
+    SELECT id, numero_tranche FROM tranches_attribution
+    WHERE agent_id = ? AND type = 'marque' AND statut = 'ouverte' LIMIT 1
+  `).bind(agent_id).first() as any
+
+  // 2) Si pas de tranche ouverte → aucune marque éligible (l'agent n'a pas atteint le palier requis)
+  if (!trancheOuverte) {
+    return c.json({
+      marques_eligibles: [],
+      tranche_ouverte: null,
+      message: "Aucune tranche ouverte : ajoutez des marques pour ouvrir un nouveau palier."
+    })
+  }
+
+  // 3) Récupère les marques qualifiées dans cette tranche ouverte (positions 1..4)
+  //    Ce sont les SEULES qui peuvent être candidates pour la 5e (portefeuille)
   const { results } = await c.env.DB.prepare(`
     SELECT m.id, m.nom, m.plateforme, m.uber_store_id,
       r.id as restaurant_id, r.nom as restaurant_nom, r.ville,
       m.is_portefeuille_proprietaire,
       m.heritee_de_resto_id, m.exclue_tranche,
-      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id) as nb_commandes,
-      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id) as ca_total,
-      (SELECT te.id FROM tranche_elements te
-        WHERE te.agent_id = ? AND te.type = 'marque' AND te.element_id = m.id LIMIT 1) as deja_compte
-    FROM marques_virtuelles m
+      m.date_lancement, m.statut_marque,
+      te.position_dans_tranche,
+      (SELECT COUNT(*) FROM commandes co WHERE co.marque_id = m.id AND co.statut != 'annulee') as nb_commandes,
+      (SELECT COALESCE(SUM(co.montant_brut),0) FROM commandes co WHERE co.marque_id = m.id AND co.statut != 'annulee') as ca_total
+    FROM tranche_elements te
+    JOIN marques_virtuelles m ON te.element_id = m.id
     JOIN restaurants r ON m.restaurant_id = r.id
-    WHERE r.agent_id = ?
+    WHERE te.agent_id = ?
+      AND te.type = 'marque'
+      AND te.tranche_id = ?
+      AND te.is_attribution = 0
       AND m.is_portefeuille_proprietaire = 0
-      AND m.exclue_tranche = 0
-    ORDER BY ca_total DESC, m.created_at DESC
-  `).bind(agent_id, agent_id).all() as any
+      AND COALESCE(m.exclue_tranche, 0) = 0
+    ORDER BY ca_total DESC, te.position_dans_tranche ASC
+  `).bind(agent_id, trancheOuverte.id).all() as any
 
-  return c.json({ marques_eligibles: results })
+  // 4) Compteur : on a besoin de 4 marques qualifiées avant la 5e (palier 5)
+  const cntRow = await c.env.DB.prepare(`
+    SELECT COUNT(*) as n FROM tranche_elements
+    WHERE tranche_id = ? AND is_attribution = 0
+  `).bind(trancheOuverte.id).first() as any
+  const nbDansTranche = cntRow?.n || 0
+  const palierPret = nbDansTranche >= 4
+
+  return c.json({
+    marques_eligibles: results,
+    tranche_ouverte: {
+      id: trancheOuverte.id,
+      numero_tranche: trancheOuverte.numero_tranche,
+      nb_qualifiees: nbDansTranche,
+      palier_pret: palierPret,
+      seuil: 5
+    },
+    message: palierPret
+      ? "Vous pouvez choisir votre 5e marque parmi celles déjà qualifiées dans la tranche."
+      : `Encore ${4 - nbDansTranche} marque(s) à qualifier avant d'ouvrir votre choix portefeuille.`
+  })
 })
 
 // POST /api/admin/attribution/demande - Créer demande d'attribution
@@ -86,6 +129,28 @@ app.post('/demande', async (c) => {
     } else {
       trId = t.id
     }
+  }
+
+  // Règle : la marque candidate doit faire partie de la tranche ouverte courante
+  // (palier/tranche : on ne choisit que parmi 1..4 déjà qualifiées dans la tranche)
+  const inTranche = await c.env.DB.prepare(`
+    SELECT id, position_dans_tranche FROM tranche_elements
+    WHERE tranche_id = ? AND element_id = ? AND type = 'marque' AND COALESCE(is_attribution, 0) = 0
+  `).bind(trId, marque_id).first() as any
+  if (!inTranche) {
+    return c.json({
+      error: "Cette marque n'est pas dans votre tranche ouverte courante. Seules les marques 1 à 4 qualifiées dans la tranche actuelle peuvent être choisies."
+    }, 400)
+  }
+
+  // Le palier 5 doit être atteint : au moins 4 marques qualifiées dans la tranche
+  const cntInTranche = await c.env.DB.prepare(
+    `SELECT COUNT(*) as n FROM tranche_elements WHERE tranche_id = ? AND COALESCE(is_attribution,0)=0`
+  ).bind(trId).first() as any
+  if ((cntInTranche?.n || 0) < 4) {
+    return c.json({
+      error: `Palier non atteint : ${cntInTranche?.n || 0}/4 marques qualifiées dans la tranche. Vous devez qualifier 4 marques avant de choisir la 5e en portefeuille.`
+    }, 400)
   }
 
   // Anti-doublon : une seule demande en attente par tranche
@@ -148,13 +213,21 @@ app.get('/demandes', async (c) => {
   return c.json({ demandes: results })
 })
 
-// PUT /api/admin/attribution/demande/:id/decision { decision, notes }
+// PUT /api/admin/attribution/demande/:id/decision { decision, notes, date_signature_portefeuille? }
+//
+// Règle métier importante :
+//   - Si decision='validee', on DOIT enregistrer la date de signature du contrat
+//     de portefeuille (date_signature_portefeuille). Par défaut = aujourd'hui.
+//     Cette date marque le début effectif du régime "100% agent" pour la marque.
+//     Les commandes < date_signature restent en commissions normales (DropEat+N+1/N+2).
+//   - Si decision='refusee', la demande disparaît automatiquement de la liste
+//     "en_attente" de l'agent (filtrée par statut côté front).
 app.put('/demande/:id/decision', async (c) => {
   const u = c.get('user')
   if (u.role !== 'superadmin') return c.json({ error: 'Réservé superadmin' }, 403)
 
   const id = parseInt(c.req.param('id'))
-  const { decision, notes } = await c.req.json()
+  const { decision, notes, date_signature_portefeuille } = await c.req.json()
   if (!['validee', 'refusee'].includes(decision)) return c.json({ error: 'decision invalide' }, 400)
 
   const d = await c.env.DB.prepare(`
@@ -171,12 +244,22 @@ app.put('/demande/:id/decision', async (c) => {
   `).bind(decision, u.id, notes || null, id).run()
 
   if (decision === 'validee') {
-    // 1) Marque la marque comme portefeuille propriétaire
-    await c.env.DB.prepare(`
-      UPDATE marques_virtuelles SET is_portefeuille_proprietaire = 1 WHERE id = ?
-    `).bind(d.marque_choisie_id).run()
+    // 1) Date de signature du contrat portefeuille (par défaut : aujourd'hui)
+    const dateSign = (date_signature_portefeuille && /^\d{4}-\d{2}-\d{2}$/.test(date_signature_portefeuille))
+      ? date_signature_portefeuille
+      : new Date().toISOString().substring(0, 10)
 
-    // 2) Position 5 dans la tranche + clôture
+    // 2) Marque la marque comme portefeuille propriétaire + enregistre la date de signature
+    await c.env.DB.prepare(`
+      UPDATE marques_virtuelles
+      SET is_portefeuille_proprietaire = 1,
+          date_signature_portefeuille = ?,
+          statut_marque = 'portefeuille',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(dateSign, d.marque_choisie_id).run()
+
+    // 3) Position 5 dans la tranche + clôture (si pas déjà au cnt=5)
     const cntRow = await c.env.DB.prepare(
       `SELECT COUNT(*) as n FROM tranche_elements WHERE tranche_id = ?`
     ).bind(d.tranche_id).first() as any
@@ -194,6 +277,14 @@ app.put('/demande/:id/decision', async (c) => {
           date_validation = CURRENT_TIMESTAMP, validateur_user_id = ?
       WHERE id = ?
     `).bind(d.marque_choisie_id, u.id, d.tranche_id).run()
+  } else if (decision === 'refusee') {
+    // Marque la marque comme "refusee" (statut_marque) pour info dans le dashboard
+    // (la marque reste vivante mais ne sera plus présentée dans les éligibles tant
+    // que l'agent ne refait pas une demande)
+    await c.env.DB.prepare(`
+      UPDATE marques_virtuelles SET statut_marque = 'refusee', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND COALESCE(statut_marque, '') = ''
+    `).bind(d.marque_choisie_id).run()
   }
 
   // Notifier l'agent
@@ -207,6 +298,32 @@ app.put('/demande/:id/decision', async (c) => {
   ).run()
 
   return c.json({ success: true })
+})
+
+// GET /api/admin/attribution/demandes-en-attente-agent
+//   Pour l'agent : récupère uniquement ses demandes EN ATTENTE
+//   (les refusées disparaissent automatiquement de cette liste).
+app.get('/demandes-en-attente-agent', async (c) => {
+  const user = c.get('user')
+  const agent_id = user.role === 'superadmin'
+    ? parseInt(c.req.query('agent_id') || '0')
+    : user.id
+  if (!agent_id) return c.json({ error: 'agent_id requis' }, 400)
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT d.id, d.agent_id, d.tranche_id, d.marque_choisie_id, d.motif, d.statut, d.created_at,
+      m.nom as marque_nom, m.plateforme,
+      r.nom as restaurant_nom, r.ville,
+      t.numero_tranche
+    FROM demandes_attribution_marque d
+    JOIN marques_virtuelles m ON d.marque_choisie_id = m.id
+    JOIN restaurants r ON m.restaurant_id = r.id
+    JOIN tranches_attribution t ON d.tranche_id = t.id
+    WHERE d.agent_id = ? AND d.statut = 'en_attente'
+    ORDER BY d.created_at DESC
+  `).bind(agent_id).all() as any
+
+  return c.json({ demandes_en_attente: results })
 })
 
 export default app
