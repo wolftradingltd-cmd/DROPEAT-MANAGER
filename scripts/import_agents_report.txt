@@ -1,0 +1,59 @@
+============================================================
+   RAPPORT D'IMPORT AGENTS DROPEAT
+============================================================
+Source         : /home/user/webapp/scripts/agents_source.tsv
+SQL généré     : /home/user/webapp/scripts/import_agents.sql
+Total lignes   : 32
+Total uniques  : 28
+Doublons fusionnés : 4
+
+Répartition par niveau MLM :
+  Niveau 0 (agents commerciaux indép.) : 15
+  Niveau 1 (sous-agents N+1)            : 7
+  Niveau 2 (sous-agents N+2)            : 5
+  Niveau 3+ (plafonné à 2 dans users)   : 1
+
+Doublons fusionnés :
+  Doublon ignoré: Sofia Aadssi (782221a1) → fusionné avec 44bf7166
+  Doublon ignoré: Elimane Kane (8c31c252) → fusionné avec 71856670
+  Doublon ignoré: Elimane Kane (faaf5811) → fusionné avec 71856670
+  Doublon ignoré: Elimane Kane (9e02643c) → fusionné avec 71856670
+
+Emails ajustés (alias +code pour collisions) :
+  Email ajusté: Steve Saez (SAEZ0613) → saezstyve+saez0613@gmail.com
+  Email ajusté: Styve Saez (SAEZ0610) → saezstyve+saez0610@gmail.com
+
+Arborescence MLM :
+◆ [N0] Sébastien Garcia (GARCIA001) — developpement.restaurent@gmail.com
+   └─ [N1] Steve Saez (SAEZ0613) — saezstyve+saez0613@gmail.com
+      └─ [N2] Noahn Saez (SAEZ001) — noahnsaez@gmail.com
+   └─ [N1] Kamel Mehdi (SNACKSOLUTION26) — kamelmarketeur@gmail.com
+      └─ [N2] Brendan Antoni (BA2026) — timevideocontact@gmail.com
+         └─ [N3] Kevin Riviere (K2026) — kevin.rivierebaeza@gmail.com
+      └─ [N2] Hocine Benhasna (HOCINEOPT) — benhasna.hocine@hotmail.fr
+   └─ [N1] Sabrina Hadri (SH143115) — sabrinahadri.succes@gmail.com
+      └─ [N2] Gregory Hadri (GREGEAT) — hadri.gregory@gmail.com
+   └─ [N1] Marie Michaux (MAKIE) — succeslife4.0@gmail.com
+      └─ [N2] Takarina Innocent (TAKA) — sct.iron@gmail.com
+   └─ [N1] Fabien Rosso (FAB13) — fafaginou@live.fr
+◆ [N0] Thomas Martin (AGT001) — thomas.martin@demo.com
+   └─ [N1] Damien Peureux (AT7) — notreviemoinschere@gmail.com
+   └─ [N1] Wolf Trading (SAN) — wolftradingltd@gmail.com
+◆ [N0] Olu Awonuga (AGT007) — naturallygoodgoodies@gmail.com
+◆ [N0] Elbac Haidar Mohamed (ELBAC_976) — moielbac@gmail.com
+◆ [N0] Styve Saez (SAEZ0610) — saezstyve+saez0610@gmail.com
+◆ [N0] Sofia Aadssi (3) — aadssisofia41@gmail.com
+◆ [N0] Sofia Aadssi (3) — aadssisofia@gmail.com
+◆ [N0] Thibaut PICARD (LION4) — thibaut.picard@edhec.com
+◆ [N0] XAVIER FRUGIER (XAVIER.F) — xasoandcoflo@orange.fr
+◆ [N0] Hamou OULD BESSI (OBH1827) — obhamou@gmail.com
+◆ [N0] Elimane Kane (EK22) — elka.kane78@gmail.com
+◆ [N0] Quentin Durand (QUENTIN27) — qntndurand@gmail.com
+◆ [N0] jeremy kahloun (FOR222) — jeremykahloun99@gmail.com
+◆ [N0] Noémie Frachisse (DNA242) — noemie.dropshipeat@gmail.com
+◆ [N0] Pascal Jimenez (PASCAL JIMENEZ) — pascaljimenez0@gmail.com
+
+Pour appliquer en local :
+   npx wrangler d1 execute webapp-production --local --file=./scripts/import_agents.sql
+Pour appliquer en prod (après vérification) :
+   npx wrangler d1 execute webapp-production --remote --file=./scripts/import_agents.sql

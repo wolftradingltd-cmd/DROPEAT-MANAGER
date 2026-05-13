@@ -1,59 +1,112 @@
 import { Hono } from 'hono'
 import type { Bindings } from '../types'
 import { requireSuperadmin, type AuthVariables } from '../middleware/auth'
-import { isRangPortefeuille } from '../lib/commissions'
+import { qualifierElement, dequalifierElement, getEtatTranches } from '../lib/tranches'
 
 const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>()
 
 app.use('*', requireSuperadmin)
 
 /**
- * Recalcule les rangs et le statut Portefeuille Propriétaire des restaurants d'un agent.
- * Règle : tous les 5 restos apportés, le 5e (10e, 15e...) est en Portefeuille (100% pour l'agent).
+ * Met à jour le rang d'apport (ordre de signature) d'un restaurant pour son agent.
+ * NB : le statut is_portefeuille_proprietaire est désormais géré par le moteur de tranches.
  */
-async function recalculerPortefeuilleAgent(db: D1Database, agentId: number) {
+async function recalculerRangsRestaurants(db: D1Database, agentId: number) {
   if (!agentId) return
   const { results } = await db.prepare(`
-    SELECT id FROM restaurants 
-    WHERE agent_id = ? 
+    SELECT id FROM restaurants
+    WHERE agent_id = ?
     ORDER BY date_signature ASC, id ASC
   `).bind(agentId).all() as any
-
   for (let i = 0; i < results.length; i++) {
-    const rang = i + 1
-    const isPortefeuille = isRangPortefeuille(rang) ? 1 : 0
-    await db.prepare(`
-      UPDATE restaurants SET rang_apport = ?, is_portefeuille_proprietaire = ? WHERE id = ?
-    `).bind(rang, isPortefeuille, results[i].id).run()
+    await db.prepare(`UPDATE restaurants SET rang_apport = ? WHERE id = ?`)
+      .bind(i + 1, results[i].id).run()
   }
 }
 
-/**
- * Recalcule les rangs et statut Portefeuille des marques d'un restaurant.
- * Règle : tous les 5 marques créées, la 5e (10e...) appartient à l'agent.
- * EXCEPTION : si le restaurant est déjà Portefeuille Propriétaire, toutes ses marques aussi.
- */
-async function recalculerPortefeuilleMarques(db: D1Database, restaurantId: number) {
-  const resto = await db.prepare('SELECT is_portefeuille_proprietaire FROM restaurants WHERE id = ?')
-    .bind(restaurantId).first() as any
-  const restoPortefeuille = !!resto?.is_portefeuille_proprietaire
-
+async function recalculerRangsMarques(db: D1Database, restaurantId: number) {
   const { results } = await db.prepare(`
-    SELECT id FROM marques_virtuelles 
-    WHERE restaurant_id = ? 
+    SELECT id FROM marques_virtuelles
+    WHERE restaurant_id = ?
     ORDER BY date_lancement ASC, id ASC
   `).bind(restaurantId).all() as any
-
   for (let i = 0; i < results.length; i++) {
-    const rang = i + 1
-    // Soit le resto entier est Portefeuille (toutes marques = 100% agent)
-    // Soit on applique la règle des 5 marques
-    const isPortefeuille = restoPortefeuille ? 1 : (isRangPortefeuille(rang) ? 1 : 0)
-    await db.prepare(`
-      UPDATE marques_virtuelles SET rang_creation = ?, is_portefeuille_proprietaire = ? WHERE id = ?
-    `).bind(rang, isPortefeuille, results[i].id).run()
+    await db.prepare(`UPDATE marques_virtuelles SET rang_creation = ? WHERE id = ?`)
+      .bind(i + 1, results[i].id).run()
   }
 }
+
+// GET /api/admin/restaurants/tree - Arborescence Restaurant → Marques → Agent
+app.get('/tree', async (c) => {
+  const agent_id = c.req.query('agent_id')
+  const search = c.req.query('search')
+
+  let where = 'WHERE 1=1'
+  const params: any[] = []
+  if (agent_id) { where += ' AND r.agent_id = ?'; params.push(agent_id) }
+  if (search) {
+    where += ' AND (r.nom LIKE ? OR r.ville LIKE ? OR r.siret LIKE ?)'
+    const s = `%${search}%`
+    params.push(s, s, s)
+  }
+
+  const stmtR = c.env.DB.prepare(`
+    SELECT r.id, r.nom, r.raison_sociale, r.siret, r.ville, r.code_postal, r.pays,
+           r.telephone, r.email, r.contact_nom,
+           r.agent_id, r.rang_apport, r.is_portefeuille_proprietaire,
+           r.tablette_sr_shop, r.date_signature, r.date_lancement, r.actif,
+           u.id as agent_uid, u.nom as agent_nom, u.prenom as agent_prenom,
+           u.email as agent_email, u.niveau as agent_niveau,
+           p.id as parent_uid, p.nom as parent_nom, p.prenom as parent_prenom, p.niveau as parent_niveau,
+           (SELECT COUNT(*) FROM marques_virtuelles m WHERE m.restaurant_id = r.id) as nb_marques,
+           (SELECT COUNT(*) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id WHERE m.restaurant_id = r.id) as nb_commandes,
+           (SELECT COALESCE(SUM(c.montant_brut), 0) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id WHERE m.restaurant_id = r.id) as ca_total
+    FROM restaurants r
+    LEFT JOIN users u ON r.agent_id = u.id
+    LEFT JOIN users p ON u.parent_id = p.id
+    ${where}
+    ORDER BY r.nom
+  `)
+  const { results: restaurants } = await (params.length ? stmtR.bind(...params) : stmtR).all() as any
+
+  // Récupère toutes les marques des restos en une requête
+  const restoIds = (restaurants as any[]).map(r => r.id)
+  let marquesMap: Record<number, any[]> = {}
+  if (restoIds.length > 0) {
+    const placeholders = restoIds.map(() => '?').join(',')
+    const { results: marques } = await c.env.DB.prepare(`
+      SELECT m.id, m.restaurant_id, m.nom, m.uber_store_id, m.plateforme,
+             m.rang_creation, m.is_portefeuille_proprietaire, m.date_lancement, m.actif,
+             (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id) as nb_commandes,
+             (SELECT COALESCE(SUM(c.montant_brut), 0) FROM commandes c WHERE c.marque_id = m.id) as ca_total,
+             (SELECT MAX(c.date_commande) FROM commandes c WHERE c.marque_id = m.id) as derniere_commande
+      FROM marques_virtuelles m
+      WHERE m.restaurant_id IN (${placeholders})
+      ORDER BY m.rang_creation, m.id
+    `).bind(...restoIds).all() as any
+    for (const m of marques as any[]) {
+      if (!marquesMap[m.restaurant_id]) marquesMap[m.restaurant_id] = []
+      marquesMap[m.restaurant_id].push(m)
+    }
+  }
+
+  const tree = (restaurants as any[]).map(r => ({
+    ...r,
+    agent: r.agent_uid ? {
+      id: r.agent_uid,
+      nom: r.agent_nom,
+      prenom: r.agent_prenom,
+      email: r.agent_email,
+      niveau: r.agent_niveau,
+      parent: r.parent_uid ? {
+        id: r.parent_uid, nom: r.parent_nom, prenom: r.parent_prenom, niveau: r.parent_niveau
+      } : null
+    } : null,
+    marques: marquesMap[r.id] || []
+  }))
+
+  return c.json({ tree, total_restaurants: tree.length })
+})
 
 // GET /api/admin/restaurants - Tous les restaurants
 app.get('/', async (c) => {
@@ -116,10 +169,25 @@ app.post('/', async (c) => {
     tablette_sr_shop ? 1 : 0, notes || null
   ).run()
 
-  // Recalculer les rangs Portefeuille pour cet agent
-  if (agent_id) await recalculerPortefeuilleAgent(c.env.DB, agent_id)
+  const newId = result.meta.last_row_id as number
 
-  return c.json({ success: true, id: result.meta.last_row_id })
+  // Recalculer les rangs et qualifier dans la tranche ouverte de l'agent
+  if (agent_id) {
+    await recalculerRangsRestaurants(c.env.DB, agent_id)
+    const q = await qualifierElement(c.env.DB, agent_id, 'client', newId)
+    return c.json({
+      success: true,
+      id: newId,
+      tranche: q.ok ? {
+        position: q.position,
+        attribution_100: q.attribution,
+        numero_tranche: q.numero_tranche
+      } : null,
+      tranche_warning: q.ok ? null : q.reason
+    })
+  }
+
+  return c.json({ success: true, id: newId })
 })
 
 // PUT /api/admin/restaurants/:id
@@ -149,13 +217,16 @@ app.put('/:id', async (c) => {
     actif !== undefined ? actif : 1, notes || null, id
   ).run()
 
-  // Si changement d'agent, recalculer pour l'ancien et le nouveau
+  // Si changement d'agent : dé-qualifier de l'ancien, qualifier dans le nouveau
   if (oldAgentId !== agent_id) {
-    if (oldAgentId) await recalculerPortefeuilleAgent(c.env.DB, oldAgentId)
-    if (agent_id) await recalculerPortefeuilleAgent(c.env.DB, agent_id)
-  } else if (agent_id) {
-    // Le rang Portefeuille peut avoir bougé, on recalcule les marques
-    await recalculerPortefeuilleMarques(c.env.DB, parseInt(id))
+    if (oldAgentId) {
+      await dequalifierElement(c.env.DB, oldAgentId, 'client', parseInt(id))
+      await recalculerRangsRestaurants(c.env.DB, oldAgentId)
+    }
+    if (agent_id) {
+      await recalculerRangsRestaurants(c.env.DB, agent_id)
+      await qualifierElement(c.env.DB, agent_id, 'client', parseInt(id))
+    }
   }
 
   return c.json({ success: true })
@@ -163,10 +234,19 @@ app.put('/:id', async (c) => {
 
 // DELETE /api/admin/restaurants/:id
 app.delete('/:id', async (c) => {
-  const id = c.req.param('id')
+  const id = parseInt(c.req.param('id'))
   const r = await c.env.DB.prepare('SELECT agent_id FROM restaurants WHERE id = ?').bind(id).first() as any
+  // Récupérer marques pour les dé-qualifier
+  const { results: marques } = await c.env.DB.prepare('SELECT id FROM marques_virtuelles WHERE restaurant_id = ?')
+    .bind(id).all() as any
   await c.env.DB.prepare('DELETE FROM restaurants WHERE id = ?').bind(id).run()
-  if (r?.agent_id) await recalculerPortefeuilleAgent(c.env.DB, r.agent_id)
+  if (r?.agent_id) {
+    await dequalifierElement(c.env.DB, r.agent_id, 'client', id)
+    for (const m of marques as any[]) {
+      await dequalifierElement(c.env.DB, r.agent_id, 'marque', m.id)
+    }
+    await recalculerRangsRestaurants(c.env.DB, r.agent_id)
+  }
   return c.json({ success: true })
 })
 
@@ -181,18 +261,80 @@ app.post('/:id/reassign', async (c) => {
   await c.env.DB.prepare('UPDATE restaurants SET agent_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .bind(new_agent_id || null, id).run()
 
-  if (oldAgentId) await recalculerPortefeuilleAgent(c.env.DB, oldAgentId)
-  if (new_agent_id) await recalculerPortefeuilleAgent(c.env.DB, new_agent_id)
+  if (oldAgentId) {
+    await dequalifierElement(c.env.DB, oldAgentId, 'client', id)
+    await recalculerRangsRestaurants(c.env.DB, oldAgentId)
+  }
+  if (new_agent_id) {
+    await recalculerRangsRestaurants(c.env.DB, new_agent_id)
+    await qualifierElement(c.env.DB, new_agent_id, 'client', id)
+  }
 
   return c.json({ success: true })
 })
 
-// POST /api/admin/restaurants/:id/recalc-portefeuille - Forcer le recalcul
-app.post('/:id/recalc-portefeuille', async (c) => {
+// POST /api/admin/restaurants/tranches/rebuild - Reconstruit les tranches à partir des données existantes
+// (à utiliser après une migration ou un import en masse)
+app.post('/tranches/rebuild', async (c) => {
+  // Reset complet
+  await c.env.DB.prepare('DELETE FROM tranche_elements').run()
+  await c.env.DB.prepare('DELETE FROM tranches_attribution').run()
+  await c.env.DB.prepare('UPDATE restaurants SET is_portefeuille_proprietaire = 0').run()
+  await c.env.DB.prepare('UPDATE marques_virtuelles SET is_portefeuille_proprietaire = 0').run()
+
+  // Pour chaque agent, re-qualifie ses restos par ordre de signature
+  const { results: agents } = await c.env.DB.prepare(`SELECT id FROM users WHERE role = 'agent'`).all() as any
+  let nbRestos = 0, nbMarques = 0, nbAttributionsRestos = 0, nbAttributionsMarques = 0
+  for (const a of agents as any[]) {
+    const { results: restos } = await c.env.DB.prepare(`
+      SELECT id FROM restaurants WHERE agent_id = ? ORDER BY date_signature ASC, id ASC
+    `).bind(a.id).all() as any
+    for (const r of restos as any[]) {
+      const q = await qualifierElement(c.env.DB, a.id, 'client', r.id)
+      if (q.ok) { nbRestos++; if (q.attribution) nbAttributionsRestos++ }
+    }
+    // Marques par ordre de date de lancement (toutes marques de tous ses restos)
+    const { results: marques } = await c.env.DB.prepare(`
+      SELECT m.id FROM marques_virtuelles m
+      JOIN restaurants r ON m.restaurant_id = r.id
+      WHERE r.agent_id = ?
+      ORDER BY m.date_lancement ASC, m.id ASC
+    `).bind(a.id).all() as any
+    for (const m of marques as any[]) {
+      const q = await qualifierElement(c.env.DB, a.id, 'marque', m.id)
+      if (q.ok) { nbMarques++; if (q.attribution) nbAttributionsMarques++ }
+    }
+  }
+  return c.json({
+    success: true,
+    rebuilt: {
+      nb_agents: agents.length,
+      nb_restaurants_qualifies: nbRestos,
+      nb_attributions_restaurants: nbAttributionsRestos,
+      nb_marques_qualifiees: nbMarques,
+      nb_attributions_marques: nbAttributionsMarques
+    }
+  })
+})
+
+// GET /api/admin/restaurants/tranches/:agent_id/:type - État des tranches d'un agent
+app.get('/tranches/:agent_id/:type', async (c) => {
+  const agent_id = parseInt(c.req.param('agent_id'))
+  const type = c.req.param('type') as 'client' | 'marque'
+  if (type !== 'client' && type !== 'marque') return c.json({ error: 'Type invalide' }, 400)
+  const etat = await getEtatTranches(c.env.DB, agent_id, type)
+  return c.json(etat)
+})
+
+// POST /api/admin/restaurants/:id/valider-tranche - Valider écrite la tranche clôturée
+app.post('/:id/valider-tranche', async (c) => {
   const id = parseInt(c.req.param('id'))
-  const r = await c.env.DB.prepare('SELECT agent_id FROM restaurants WHERE id = ?').bind(id).first() as any
-  if (r?.agent_id) await recalculerPortefeuilleAgent(c.env.DB, r.agent_id)
-  await recalculerPortefeuilleMarques(c.env.DB, id)
+  const user = c.get('user')
+  await c.env.DB.prepare(`
+    UPDATE tranches_attribution
+    SET validation_ecrite = 1, date_validation = CURRENT_TIMESTAMP, validateur_user_id = ?
+    WHERE id = ? AND statut = 'cloturee'
+  `).bind(user.id, id).run()
   return c.json({ success: true })
 })
 
@@ -219,6 +361,11 @@ app.post('/:id/marques', async (c) => {
 
   if (!nom) return c.json({ error: 'Nom requis' }, 400)
 
+  // Récupère l'agent du restaurant
+  const resto = await c.env.DB.prepare('SELECT agent_id FROM restaurants WHERE id = ?')
+    .bind(restaurant_id).first() as any
+  if (!resto) return c.json({ error: 'Restaurant introuvable' }, 404)
+
   const result = await c.env.DB.prepare(`
     INSERT INTO marques_virtuelles (restaurant_id, nom, uber_store_id, plateforme, date_lancement, notes)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -227,9 +374,23 @@ app.post('/:id/marques', async (c) => {
     plateforme || 'uber_eats', date_lancement || null, notes || null
   ).run()
 
-  await recalculerPortefeuilleMarques(c.env.DB, restaurant_id)
+  const newId = result.meta.last_row_id as number
+  await recalculerRangsMarques(c.env.DB, restaurant_id)
 
-  return c.json({ success: true, id: result.meta.last_row_id })
+  // Qualifier la nouvelle marque dans la tranche ouverte de l'agent
+  let trancheInfo: any = null
+  if (resto.agent_id) {
+    const q = await qualifierElement(c.env.DB, resto.agent_id, 'marque', newId)
+    if (q.ok) {
+      trancheInfo = {
+        position: q.position,
+        attribution_100: q.attribution,
+        numero_tranche: q.numero_tranche
+      }
+    }
+  }
+
+  return c.json({ success: true, id: newId, tranche: trancheInfo })
 })
 
 // PUT /api/admin/restaurants/marques/:marque_id
@@ -251,7 +412,7 @@ app.put('/marques/:marque_id', async (c) => {
     date_lancement || null, actif !== undefined ? actif : 1, notes || null, marque_id
   ).run()
 
-  if (m?.restaurant_id) await recalculerPortefeuilleMarques(c.env.DB, m.restaurant_id)
+  if (m?.restaurant_id) await recalculerRangsMarques(c.env.DB, m.restaurant_id)
 
   return c.json({ success: true })
 })
@@ -259,10 +420,17 @@ app.put('/marques/:marque_id', async (c) => {
 // DELETE marque
 app.delete('/marques/:marque_id', async (c) => {
   const marque_id = parseInt(c.req.param('marque_id'))
-  const m = await c.env.DB.prepare('SELECT restaurant_id FROM marques_virtuelles WHERE id = ?')
-    .bind(marque_id).first() as any
+  const m = await c.env.DB.prepare(`
+    SELECT m.restaurant_id, r.agent_id
+    FROM marques_virtuelles m
+    JOIN restaurants r ON m.restaurant_id = r.id
+    WHERE m.id = ?
+  `).bind(marque_id).first() as any
   await c.env.DB.prepare('DELETE FROM marques_virtuelles WHERE id = ?').bind(marque_id).run()
-  if (m?.restaurant_id) await recalculerPortefeuilleMarques(c.env.DB, m.restaurant_id)
+  if (m?.agent_id) {
+    await dequalifierElement(c.env.DB, m.agent_id, 'marque', marque_id)
+  }
+  if (m?.restaurant_id) await recalculerRangsMarques(c.env.DB, m.restaurant_id)
   return c.json({ success: true })
 })
 

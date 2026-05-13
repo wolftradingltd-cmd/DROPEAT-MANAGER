@@ -11,6 +11,18 @@ import adminImports from './routes/admin-imports'
 import adminCommissions from './routes/admin-commissions'
 import adminPaiements from './routes/admin-paiements'
 import adminDashboard from './routes/admin-dashboard'
+import adminAgents from './routes/admin-agents'
+import adminDocuments from './routes/admin-documents'
+import adminProspects from './routes/admin-prospects'
+import adminOmnipotence from './routes/admin-omnipotence'
+import adminAttribution from './routes/admin-attribution'
+import adminDashboardV2 from './routes/admin-dashboard-v2'
+import adminTracabilite from './routes/admin-tracabilite'
+import adminComptes from './routes/admin-comptes'
+import adminShortener from './routes/admin-shortener'
+import agentSousAgents from './routes/agent-sous-agents'
+import register from './routes/register'
+import mlm from './routes/mlm'
 import agent from './routes/agent'
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -29,6 +41,24 @@ app.route('/api/admin/imports', adminImports)
 app.route('/api/admin/commissions', adminCommissions)
 app.route('/api/admin/paiements', adminPaiements)
 app.route('/api/admin/dashboard', adminDashboard)
+app.route('/api/admin/agents', adminAgents)
+app.route('/api/admin/documents', adminDocuments)
+app.route('/api/admin/prospects', adminProspects)
+app.route('/api/admin/omnipotence', adminOmnipotence)
+app.route('/api/admin/attribution', adminAttribution)
+app.route('/api/admin/dashboard-v2', adminDashboardV2)
+app.route('/api/admin/tracabilite', adminTracabilite)
+app.route('/api/admin/comptes', adminComptes)
+app.route('/api/shortener', adminShortener)
+
+// Agent : création de filleul + comptes
+app.route('/api/agent/sous-agents', agentSousAgents)
+
+// Register (public + protégé)
+app.route('/api/register', register)
+
+// MLM hiérarchique (tout user authentifié)
+app.route('/api/mlm', mlm)
 
 // Agent commercial
 app.route('/api/agent', agent)
@@ -57,6 +87,34 @@ app.get('/login', (c) => {
       </div>
     </div>
   )
+})
+
+app.get('/register', (c) => {
+  return c.render(
+    <div id="app">
+      <div class="loading-screen">
+        <div class="spinner"></div>
+        <p>Chargement…</p>
+      </div>
+    </div>
+  )
+})
+
+// URL Shortener public — /s/:code redirige vers l'URL originale
+app.get('/s/:code', async (c) => {
+  const code = c.req.param('code')
+  const r = await c.env.DB.prepare(`
+    SELECT * FROM url_courtes WHERE code = ? AND actif = 1
+  `).bind(code).first() as any
+  if (!r) return c.text('Lien introuvable ou expiré', 404)
+  if (r.expire_at && new Date(r.expire_at) < new Date()) {
+    return c.text('Lien expiré', 410)
+  }
+  // Stats clic
+  await c.env.DB.prepare(`
+    UPDATE url_courtes SET nb_clics = nb_clics + 1, derniere_visite = CURRENT_TIMESTAMP WHERE id = ?
+  `).bind(r.id).run()
+  return c.redirect(r.url_originale, 302)
 })
 
 export default app

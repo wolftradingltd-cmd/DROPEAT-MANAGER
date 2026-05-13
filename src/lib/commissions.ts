@@ -34,25 +34,30 @@ export interface PaliersMap {
  * Retourne le montant_par_commande du palier qui contient le montant.
  */
 export function getCommissionForOrder(montantCommande: number, paliers: Palier[]): number {
-  if (montantCommande <= 0 || paliers.length === 0) return 0
+  const p = getPalierForOrder(montantCommande, paliers)
+  return p ? p.montant_par_commande : 0
+}
+
+/**
+ * Retourne le palier complet (avec id, seuils, montant) appliqué à une commande.
+ * Utile pour la traçabilité 100% : on persiste l'id du palier sur la commande.
+ */
+export function getPalierForOrder(montantCommande: number, paliers: Palier[]): Palier | null {
+  if (montantCommande <= 0 || paliers.length === 0) return null
   const sorted = [...paliers].sort((a, b) => a.seuil_min - b.seuil_min)
   for (const p of sorted) {
     const min = p.seuil_min
     const max = p.seuil_max ?? Infinity
-    if (montantCommande >= min && montantCommande < max) {
-      return p.montant_par_commande
-    }
-    // Cas limite : si seuil_max est inclusif (ex: 30€ = palier 0-30)
-    if (montantCommande === max) {
-      return p.montant_par_commande
-    }
+    if (montantCommande >= min && montantCommande < max) return p
+    // Cas limite : seuil_max inclusif (ex: 30€ = palier 0-30)
+    if (montantCommande === max) return p
   }
-  // Si supérieur au dernier palier
+  // Si supérieur au dernier palier (seuil_max = null)
   const last = sorted[sorted.length - 1]
   if (last && last.seuil_max === null && montantCommande >= last.seuil_min) {
-    return last.montant_par_commande
+    return last
   }
-  return 0
+  return null
 }
 
 /**
@@ -99,6 +104,11 @@ export interface CalculCommandeResult {
   marge_dropeat: number            // Marge nette pour DropEat
   is_portefeuille: boolean
   tablette: boolean
+  // Traçabilité 100% : ids des paliers appliqués
+  palier_facture_id: number | null
+  palier_agent_id: number | null
+  palier_n1_id: number | null
+  palier_n2_id: number | null
   details: {
     type_facturation: string
     type_commission_agent: string
@@ -128,19 +138,23 @@ export function calculerCommissionCommande(params: {
   const facturationPaliers = tablette_sr_shop
     ? paliers.facturation_restaurant_tablette
     : paliers.facturation_restaurant
-  const facturation_restaurant = getCommissionForOrder(montant_commande, facturationPaliers)
+  const palierFacture = getPalierForOrder(montant_commande, facturationPaliers)
+  const facturation_restaurant = palierFacture?.montant_par_commande || 0
 
   // Commission agent (apporteur direct du resto)
   // Si Portefeuille Propriétaire => 100% (= grille agent_portefeuille)
   // Sinon => commission standard
   let commission_agent = 0
   let type_commission_agent = 'aucune'
+  let palierAgent: Palier | null = null
   if (agent_niveau !== null) {
     if (is_portefeuille_proprietaire) {
-      commission_agent = getCommissionForOrder(montant_commande, paliers.agent_portefeuille)
+      palierAgent = getPalierForOrder(montant_commande, paliers.agent_portefeuille)
+      commission_agent = palierAgent?.montant_par_commande || 0
       type_commission_agent = 'portefeuille_proprietaire'
     } else {
-      commission_agent = getCommissionForOrder(montant_commande, paliers.agent_standard)
+      palierAgent = getPalierForOrder(montant_commande, paliers.agent_standard)
+      commission_agent = palierAgent?.montant_par_commande || 0
       type_commission_agent = 'agent_standard'
     }
   }
@@ -150,20 +164,19 @@ export function calculerCommissionCommande(params: {
   // Si l'apporteur est un sous-agent N2 => son parent (sous-agent N1) touche n1, et son grand-parent (agent commercial) touche n2
   let commission_parent = 0
   let commission_grand_parent = 0
+  let palierN1: Palier | null = null
+  let palierN2: Palier | null = null
   if (!is_portefeuille_proprietaire && agent_niveau !== null) {
-    // L'apporteur a un parent ?
     if (has_parent) {
-      // Le parent touche une commission "sous_agent_n1" (peu importe le niveau de l'apporteur tant qu'il est sous-agent)
-      // Cas 1 : apporteur niveau 1 (sous-agent direct), parent = niveau 0 (agent commercial) => n1
-      // Cas 2 : apporteur niveau 2 (sous-sous-agent), parent = niveau 1 (sous-agent), grand-parent = niveau 0 (agent commercial)
       if (agent_niveau === 1) {
-        commission_parent = getCommissionForOrder(montant_commande, paliers.sous_agent_n1)
+        palierN1 = getPalierForOrder(montant_commande, paliers.sous_agent_n1)
+        commission_parent = palierN1?.montant_par_commande || 0
       } else if (agent_niveau === 2) {
-        // Le parent direct (sous-agent N1) touche en tant que parent de N2
-        // Le grand-parent (agent commercial) touche en tant que parent indirect via N1->N2
-        commission_parent = getCommissionForOrder(montant_commande, paliers.sous_agent_n1)
+        palierN1 = getPalierForOrder(montant_commande, paliers.sous_agent_n1)
+        commission_parent = palierN1?.montant_par_commande || 0
         if (has_grand_parent) {
-          commission_grand_parent = getCommissionForOrder(montant_commande, paliers.sous_agent_n2)
+          palierN2 = getPalierForOrder(montant_commande, paliers.sous_agent_n2)
+          commission_grand_parent = palierN2?.montant_par_commande || 0
         }
       }
     }
@@ -183,6 +196,10 @@ export function calculerCommissionCommande(params: {
     marge_dropeat,
     is_portefeuille: is_portefeuille_proprietaire,
     tablette: tablette_sr_shop,
+    palier_facture_id: palierFacture?.id ?? null,
+    palier_agent_id: palierAgent?.id ?? null,
+    palier_n1_id: palierN1?.id ?? null,
+    palier_n2_id: palierN2?.id ?? null,
     details: {
       type_facturation: tablette_sr_shop ? 'avec_tablette' : 'sans_tablette',
       type_commission_agent

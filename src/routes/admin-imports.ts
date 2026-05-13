@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { Bindings } from '../types'
 import { requireAuth, type AuthVariables } from '../middleware/auth'
-import { parseCsv, detectColumns, parseNumber, parseDate } from '../lib/csv-parser'
+import { parseCsv, detectColumns, parseNumber, parseDate, normalizeStatus } from '../lib/csv-parser'
 
 const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>()
 
@@ -35,20 +35,88 @@ async function userCanUploadForMarque(db: D1Database, user: any, marqueId: numbe
   return false
 }
 
-// POST /api/imports/preview - Analyser un CSV (détection colonnes)
+// POST /api/imports/preview - Analyser un CSV (détection colonnes + marque)
 app.post('/preview', async (c) => {
+  const user = c.get('user')
   const { csv } = await c.req.json()
   if (!csv) return c.json({ error: 'CSV requis' }, 400)
 
   const { rows, headers, delimiter } = parseCsv(csv)
   const detected = detectColumns(headers)
 
+  // Auto-détection marque via colonnes Uber Eats officielles :
+  //  - "Restaurant" (store_name)        : nom du store
+  //  - "Id. externe du restaurant"      : UUID store
+  //  - "Marque Eats" (marque_eats)      : marque virtuelle si différente
+  let marque_suggeree: any = null
+  let marques_uniques: Array<{ nom: string, uuid: string | null, nb: number }> = []
+
+  if (rows.length && (detected.store_name || detected.store_uuid || detected.marque_eats)) {
+    // Compter les marques uniques sur l'ensemble du CSV pour détecter le multi-marque
+    const counts = new Map<string, { nom: string, uuid: string | null, nb: number }>()
+    for (const r of rows) {
+      // "Marque Eats" prioritaire SI elle a une vraie valeur (pas "Uber Eats" générique ni vide)
+      const marqueEatsRaw = detected.marque_eats ? (r[detected.marque_eats]?.trim() || '') : ''
+      const marqueEatsValide = marqueEatsRaw && marqueEatsRaw.toLowerCase() !== 'uber eats' && marqueEatsRaw.toLowerCase() !== 'uber\u00a0eats'
+      const nom = (marqueEatsValide ? marqueEatsRaw : '') ||
+                  (detected.store_name && r[detected.store_name]?.trim()) || ''
+      const uuid = detected.store_uuid ? (r[detected.store_uuid]?.trim() || null) : null
+      if (!nom) continue
+      const key = nom.toLowerCase()
+      const ex = counts.get(key)
+      if (ex) ex.nb++
+      else counts.set(key, { nom, uuid, nb: 1 })
+    }
+    marques_uniques = Array.from(counts.values()).sort((a, b) => b.nb - a.nb)
+
+    // Première marque dominante
+    const top = marques_uniques[0]
+    if (top) {
+      let m: any = null
+      if (top.uuid) {
+        m = await c.env.DB.prepare(`
+          SELECT m.id, m.nom, m.uber_store_id, m.restaurant_id, r.nom as restaurant_nom, r.agent_id
+          FROM marques_virtuelles m JOIN restaurants r ON m.restaurant_id = r.id
+          WHERE m.uber_store_id = ? LIMIT 1
+        `).bind(top.uuid).first()
+      }
+      if (!m && top.nom) {
+        m = await c.env.DB.prepare(`
+          SELECT m.id, m.nom, m.uber_store_id, m.restaurant_id, r.nom as restaurant_nom, r.agent_id
+          FROM marques_virtuelles m JOIN restaurants r ON m.restaurant_id = r.id
+          WHERE LOWER(m.nom) = LOWER(?) OR LOWER(r.nom) = LOWER(?) LIMIT 1
+        `).bind(top.nom, top.nom).first()
+      }
+      if (m) {
+        let autorise = user.role === 'superadmin'
+        if (!autorise) {
+          let cur = (m as any).agent_id
+          while (cur) {
+            if (cur === user.id) { autorise = true; break }
+            const p = await c.env.DB.prepare('SELECT parent_id FROM users WHERE id = ?').bind(cur).first() as any
+            cur = p?.parent_id || null
+          }
+        }
+        marque_suggeree = autorise ? { ...(m as any), match: top.uuid ? 'uber_store_id' : 'nom' } : null
+      } else {
+        marque_suggeree = {
+          id: null,
+          nom_detecte: top.nom,
+          uber_store_id_detecte: top.uuid,
+          match: 'nouveau'
+        }
+      }
+    }
+  }
+
   return c.json({
     headers,
     delimiter,
     detected,
     nb_lignes: rows.length,
-    apercu: rows.slice(0, 5)
+    apercu: rows.slice(0, 5),
+    marque_suggeree,
+    marques_uniques // utile pour CSV multi-marque (afficher liste à l'utilisateur)
   })
 })
 
@@ -84,7 +152,7 @@ app.post('/', async (c) => {
 
   for (const row of rows) {
     try {
-      const date = cols.date ? parseDate(row[cols.date]) : null
+      const date = cols.date ? parseDate(row[cols.date], cols.time ? row[cols.time] : undefined) : null
       if (!date) { nb_erreurs++; continue }
 
       const total = cols.total ? parseNumber(row[cols.total]) : 0
@@ -93,10 +161,21 @@ app.post('/', async (c) => {
       if (!net && total) net = total - uber_fee
 
       const order_id = cols.order_id ? row[cols.order_id] : null
-      const statut = cols.status ? row[cols.status] : 'completee'
+      const uuid = cols.uuid ? row[cols.uuid] : null
+      const statutRaw = cols.status ? row[cols.status] : ''
+      const statut = normalizeStatus(statutRaw)
+      const type_honoree = cols.type_honoree ? row[cols.type_honoree] : null
 
-      // Doublon ?
-      if (order_id) {
+      // Ignorer les annulées (CA = 0)
+      if (statut === 'annulee') { nb_erreurs++; continue }
+
+      // Doublon ? Priorité UUID, fallback order_id
+      if (uuid) {
+        const existing = await c.env.DB.prepare(
+          'SELECT id FROM commandes WHERE uber_uuid = ?'
+        ).bind(uuid).first()
+        if (existing) { nb_doublons++; continue }
+      } else if (order_id) {
         const existing = await c.env.DB.prepare(
           'SELECT id FROM commandes WHERE marque_id = ? AND uber_order_id = ?'
         ).bind(marque_id, order_id).first()
@@ -104,11 +183,11 @@ app.post('/', async (c) => {
       }
 
       await c.env.DB.prepare(`
-        INSERT INTO commandes (marque_id, uber_order_id, date_commande, montant_brut, frais_uber, montant_net, statut, raw_data, import_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO commandes (marque_id, uber_order_id, uber_uuid, type_honoree, date_commande, montant_brut, frais_uber, montant_net, statut, raw_data, import_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
-        marque_id, order_id || null, date,
-        total, uber_fee, net, statut || 'completee',
+        marque_id, order_id || null, uuid || null, type_honoree || null, date,
+        total, uber_fee, net, statut,
         JSON.stringify(row), import_id
       ).run()
 
@@ -134,10 +213,21 @@ app.post('/', async (c) => {
     import_id
   ).run()
 
+  // === CALCUL AUTOMATIQUE DES COMMISSIONS ===
+  // Recalcule chaque mois impacté par cet import
+  let commissionsCalcul: any = null
+  try {
+    const { recalculerPeriodesImpactees } = await import('../lib/auto-commissions')
+    commissionsCalcul = await recalculerPeriodesImpactees(c.env.DB, import_id as number)
+  } catch (e: any) {
+    console.error('Erreur calcul auto commissions:', e?.message || e)
+  }
+
   return c.json({
     success: true, import_id, nb_lignes: rows.length,
     nb_importees, nb_doublons, nb_erreurs, montant_total: total_montant,
-    periode: { debut: date_min, fin: date_max }
+    periode: { debut: date_min, fin: date_max },
+    commissions_auto: commissionsCalcul
   })
 })
 
