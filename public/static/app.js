@@ -937,27 +937,35 @@ async function restaurantDetailModal(id, agents) {
       ${docs.documents.length ? `
         <div class="card-title mt-3"><i class="fas fa-file"></i> Fichiers uploadés (${docs.documents.length})</div>
         <table class="data-table">
-          <thead><tr><th>Type</th><th>Fichier</th><th>Statut</th><th>Émis le</th><th>Expire le</th><th>Uploader</th><th class="text-right">Actions</th></tr></thead>
-          <tbody>${docs.documents.map(d => `
+          <thead><tr><th>Type</th><th>Fichier</th><th class="text-right">Taille</th><th>Statut</th><th>Émis le</th><th>Expire le</th><th>Uploader</th><th class="text-right">Actions</th></tr></thead>
+          <tbody>${docs.documents.map(d => {
+            const isImg = d.mime_type && d.mime_type.startsWith('image/')
+            const isPdf = d.mime_type === 'application/pdf'
+            const fileIcon = isImg ? 'fa-file-image' : isPdf ? 'fa-file-pdf' : (d.mime_type || '').includes('word') ? 'fa-file-word' : (d.mime_type || '').includes('excel') || (d.mime_type || '').includes('sheet') ? 'fa-file-excel' : 'fa-file'
+            const fileColor = isImg ? '#10b981' : isPdf ? '#dc2626' : '#6b7280'
+            const sizeKb = d.taille_octets ? (d.taille_octets > 1024*1024 ? (d.taille_octets/1024/1024).toFixed(1) + ' Mo' : Math.round(d.taille_octets/1024) + ' Ko') : '—'
+            return `
             <tr>
-              <td>${escapeHtml(d.type_document)}</td>
-              <td><i class="fas fa-file"></i> ${escapeHtml(d.nom_fichier)}</td>
-              <td>${d.statut === 'valide' ? '<span class="badge badge-primary">Validé</span>' :
-                  d.statut === 'rejete' ? '<span class="badge badge-danger">Rejeté</span>' :
+              <td><span class="badge badge-slate" style="font-size:.7rem">${escapeHtml(d.type_document)}</span></td>
+              <td><i class="fas ${fileIcon}" style="color:${fileColor}"></i> ${escapeHtml(d.nom_fichier)}${d.url_externe ? ' <i class="fas fa-link text-muted" title="Lien externe" style="font-size:.7rem"></i>' : ''}</td>
+              <td class="text-right text-muted" style="font-size:.8rem">${sizeKb}</td>
+              <td>${d.statut === 'valide' ? '<span class="badge badge-primary"><i class="fas fa-check"></i> Validé</span>' :
+                  d.statut === 'rejete' ? '<span class="badge badge-danger"><i class="fas fa-times"></i> Rejeté</span>' :
                   d.statut === 'expire' ? '<span class="badge badge-danger">Expiré</span>' :
-                  '<span class="badge badge-warning">En attente</span>'}</td>
+                  '<span class="badge badge-warning"><i class="fas fa-clock"></i> En attente</span>'}</td>
               <td>${fmtDate(d.date_emission)}</td>
-              <td>${fmtDate(d.date_expiration)}</td>
+              <td>${d.date_expiration ? (new Date(d.date_expiration) < new Date() ? '<span style="color:var(--danger)"><strong>' + fmtDate(d.date_expiration) + '</strong></span>' : fmtDate(d.date_expiration)) : '—'}</td>
               <td style="font-size:.8rem">${d.uploader_prenom ? escapeHtml(d.uploader_prenom + ' ' + d.uploader_nom) : '—'}</td>
-              <td class="text-right">
-                <button class="btn btn-sm btn-secondary" data-view-doc="${d.id}" title="Voir"><i class="fas fa-eye"></i></button>
+              <td class="text-right" style="white-space:nowrap">
+                <button class="btn btn-sm btn-secondary" data-view-doc="${d.id}" title="Prévisualiser"><i class="fas fa-eye"></i></button>
+                <button class="btn btn-sm btn-secondary" data-download-doc="${d.id}" title="Télécharger"><i class="fas fa-download"></i></button>
                 ${d.statut === 'en_attente' ? `<button class="btn btn-sm btn-primary" data-validate-doc="${d.id}" title="Valider"><i class="fas fa-check"></i></button>` : ''}
                 ${d.statut === 'en_attente' ? `<button class="btn btn-sm btn-warning" data-reject-doc="${d.id}" title="Rejeter"><i class="fas fa-times"></i></button>` : ''}
                 <button class="btn btn-sm btn-danger" data-del-doc="${d.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
               </td>
-            </tr>`).join('')}</tbody>
+            </tr>`}).join('')}</tbody>
         </table>
-      ` : ''}
+      ` : '<p class="text-muted" style="text-align:center;padding:1rem"><i class="fas fa-folder-open"></i> Aucun document uploadé pour ce restaurant.</p>'}
     </div>
 
     <div class="resto-tab-pane" data-pane="check" style="display:none">
@@ -1026,19 +1034,42 @@ async function restaurantDetailModal(id, agents) {
         window.open(data.url_externe, '_blank')
       } else if (data.contenu_base64) {
         const w = window.open('', '_blank')
+        const title = escapeHtml(data.nom_fichier || 'Document')
         if (data.mime_type && data.mime_type.startsWith('image/')) {
-          w.document.write(`<img src="data:${data.mime_type};base64,${data.contenu_base64}" style="max-width:100%"/>`)
+          w.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>body{margin:0;background:#1a1a1a;display:flex;align-items:center;justify-content:center;min-height:100vh}img{max-width:100%;max-height:100vh;box-shadow:0 4px 20px rgba(0,0,0,.5)}</style></head><body><img src="data:${data.mime_type};base64,${data.contenu_base64}" alt="${title}"/></body></html>`)
         } else if (data.mime_type === 'application/pdf') {
-          w.document.write(`<iframe src="data:application/pdf;base64,${data.contenu_base64}" style="width:100%;height:100vh;border:0"></iframe>`)
+          w.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>body,html{margin:0;height:100%}</style></head><body><iframe src="data:application/pdf;base64,${data.contenu_base64}" style="width:100%;height:100vh;border:0"></iframe></body></html>`)
         } else {
-          // Téléchargement
+          // Pour les autres MIME, on force le téléchargement
           const a = document.createElement('a')
           a.href = `data:${data.mime_type || 'application/octet-stream'};base64,${data.contenu_base64}`
           a.download = data.nom_fichier
           a.click()
+          w.close()
         }
+      } else {
+        toast('Document vide ou indisponible', 'error')
       }
     } catch (err) { toast('Impossible d\'ouvrir le document', 'error') }
+  })
+  m.el.querySelectorAll('[data-download-doc]').forEach(b => b.onclick = async () => {
+    try {
+      const { data } = await api.get('/admin/documents/' + b.dataset.downloadDoc + '/contenu')
+      if (data.url_externe) {
+        // Lien externe : ouvre dans nouvel onglet (le navigateur gère le téléchargement)
+        window.open(data.url_externe, '_blank')
+      } else if (data.contenu_base64) {
+        const a = document.createElement('a')
+        a.href = `data:${data.mime_type || 'application/octet-stream'};base64,${data.contenu_base64}`
+        a.download = data.nom_fichier || 'document'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        toast('Téléchargement lancé')
+      } else {
+        toast('Document vide ou indisponible', 'error')
+      }
+    } catch (err) { toast('Impossible de télécharger le document', 'error') }
   })
   m.el.querySelectorAll('[data-validate-doc]').forEach(b => b.onclick = async () => {
     try {
@@ -3762,12 +3793,13 @@ PAGES['profil'] = PAGES['a-profil'] = async (c) => {
 PAGES['a-dashboard'] = async (c) => {
   const now = new Date()
   const annee = now.getFullYear(), mois = now.getMonth() + 1
-  const [me, com, codesR, tree, histR] = await Promise.all([
+  const [me, com, codesR, tree, histR, portR] = await Promise.all([
     api.get('/agent/me'),
     api.get(`/agent/commissions?annee=${annee}&mois=${mois}`),
     api.get('/agent/sous-agents/codes').catch(() => ({ data: { codes: [] } })),
     api.get(`/agent/mlm-tree?annee=${annee}&mois=${mois}`).catch(() => ({ data: { filleuls: [], total_n1: 0, total_n2: 0 } })),
-    api.get('/agent/commissions/history?type=monthly').catch(() => ({ data: { history: [] } }))
+    api.get('/agent/commissions/history?type=monthly').catch(() => ({ data: { history: [] } })),
+    api.get(`/agent/portefeuille?annee=${annee}&mois=${mois}`).catch(() => ({ data: { marques_portefeuille: [], stats: { nb_marques_portefeuille: 0, ca_periode: 0, commissions_periode: 0, nb_commandes_periode: 0 } } }))
   ])
   const u = me.data.user, s = me.data.stats, d = com.data.detail
   const reste = me.data.reste_avant_portefeuille
@@ -3777,6 +3809,9 @@ PAGES['a-dashboard'] = async (c) => {
   const codesRecents = (codesR.data.codes || []).slice(0, 5)
   const mlmTree = tree.data
   const history = histR.data.history || []
+  const portefeuille = portR.data || { marques_portefeuille: [], stats: { nb_marques_portefeuille: 0, ca_periode: 0, commissions_periode: 0, nb_commandes_periode: 0 } }
+  const portMarques = portefeuille.marques_portefeuille || []
+  const portStats = portefeuille.stats || { nb_marques_portefeuille: 0, ca_periode: 0, commissions_periode: 0, nb_commandes_periode: 0 }
 
   c.innerHTML = `
     <div class="page-header">
@@ -3896,6 +3931,95 @@ PAGES['a-dashboard'] = async (c) => {
       </div>
     </div>
 
+    <!-- ===== MON PORTEFEUILLE 100% — vue dédiée ===== -->
+    <div class="card mb-3" style="border-left:4px solid var(--gold, #FFB800);background:linear-gradient(135deg, #fffbeb 0%, #ffffff 100%)">
+      <div class="card-title" style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+        <i class="fas fa-crown" style="color:var(--gold, #FFB800)"></i>
+        Mon Portefeuille Propriétaire — 100%
+        <span class="badge badge-gold" style="background:linear-gradient(135deg,#FFB800,#FF8C00);color:white;font-weight:700;padding:.18rem .6rem;border-radius:12px;font-size:.7rem">
+          ${portStats.nb_marques_portefeuille} marque${portStats.nb_marques_portefeuille > 1 ? 's' : ''}
+        </span>
+        <span class="text-muted" style="font-weight:normal;font-size:.85rem;margin-left:.4rem">
+          Vous touchez <strong>100%</strong> des commissions DropEat sur ces marques (selon date de signature contrat)
+        </span>
+        <button class="btn btn-sm btn-secondary" id="goPortefeuilleFull" style="margin-left:auto">
+          <i class="fas fa-list"></i> Voir tout dans Mes Restaurants
+        </button>
+      </div>
+
+      <!-- KPI Portefeuille -->
+      <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);gap:.8rem;margin-bottom:1rem">
+        <div class="stat-card gold" style="padding:.8rem">
+          <div class="stat-label" style="font-size:.72rem">Marques en portefeuille</div>
+          <div class="stat-value" style="font-size:1.4rem">${portStats.nb_marques_portefeuille}</div>
+        </div>
+        <div class="stat-card primary" style="padding:.8rem">
+          <div class="stat-label" style="font-size:.72rem">CA portefeuille (${monthsFR[mois-1]})</div>
+          <div class="stat-value" style="font-size:1.4rem">${fmtEUR(portStats.ca_periode)}</div>
+        </div>
+        <div class="stat-card accent" style="padding:.8rem">
+          <div class="stat-label" style="font-size:.72rem">Commissions 100% (mois)</div>
+          <div class="stat-value" style="font-size:1.4rem;color:#06A05A">${fmtEUR(portStats.commissions_periode)}</div>
+        </div>
+        <div class="stat-card info" style="padding:.8rem">
+          <div class="stat-label" style="font-size:.72rem">Commandes (mois)</div>
+          <div class="stat-value" style="font-size:1.4rem">${fmtNum(portStats.nb_commandes_periode)}</div>
+        </div>
+      </div>
+
+      ${portMarques.length ? `
+        <table class="data-table" style="font-size:.85rem">
+          <thead>
+            <tr>
+              <th>Marque</th>
+              <th>Restaurant</th>
+              <th>Agent</th>
+              <th>Signature</th>
+              <th class="text-right">Cmds (mois)</th>
+              <th class="text-right">CA (mois)</th>
+              <th class="text-right">Commission 100%</th>
+              <th class="text-right">CA total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${portMarques.map(m => `
+              <tr>
+                <td>
+                  <strong><i class="fas fa-crown" style="color:var(--gold, #FFB800);font-size:.7rem"></i> ${escapeHtml(m.nom)}</strong>
+                  <div class="text-muted" style="font-size:.7rem">${escapeHtml(m.plateforme || '')}${m.uber_store_id ? ' · ' + escapeHtml(m.uber_store_id) : ''}</div>
+                </td>
+                <td>${escapeHtml(m.restaurant_nom)}<div class="text-muted" style="font-size:.7rem">${escapeHtml(m.ville || '')}</div></td>
+                <td>${escapeHtml((m.agent_prenom || '') + ' ' + (m.agent_nom || ''))}${m.agent_id === u.id ? ' <span class="badge" style="background:#dcfce7;color:#15803d;font-size:.65rem;padding:.1rem .4rem;border-radius:4px">VOUS</span>' : ''}</td>
+                <td style="font-size:.78rem">${m.date_signature_portefeuille ? '<span style="color:#06A05A"><i class="fas fa-check"></i> ' + escapeHtml(m.date_signature_portefeuille.substring(0,10)) + '</span>' : '<span class="text-muted">Non signée</span>'}</td>
+                <td class="text-right">${fmtNum(m.nb_commandes_periode || 0)}</td>
+                <td class="text-right">${fmtEUR(m.ca_periode || 0)}</td>
+                <td class="text-right"><strong style="color:#06A05A">${fmtEUR(m.commissions_portefeuille_periode || 0)}</strong></td>
+                <td class="text-right text-muted">${fmtEUR(m.ca_total || 0)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="background:rgba(255,184,0,.1);font-weight:700">
+              <td colspan="4">TOTAL — ${portStats.nb_marques_portefeuille} marque${portStats.nb_marques_portefeuille > 1 ? 's' : ''}</td>
+              <td class="text-right">${fmtNum(portStats.nb_commandes_periode)}</td>
+              <td class="text-right">${fmtEUR(portStats.ca_periode)}</td>
+              <td class="text-right" style="color:#06A05A;font-size:1rem">${fmtEUR(portStats.commissions_periode)}</td>
+              <td class="text-right"></td>
+            </tr>
+          </tfoot>
+        </table>
+      ` : `
+        <div style="padding:1.5rem;text-align:center;color:#6b7280;background:#fafafa;border-radius:8px">
+          <i class="fas fa-crown" style="font-size:2rem;color:#fde68a;margin-bottom:.5rem"></i>
+          <p style="margin:.3rem 0"><strong>Aucune marque en portefeuille pour le moment.</strong></p>
+          <p style="font-size:.85rem;margin:.2rem 0">Apportez 5 restaurants pour débloquer votre 1ʳᵉ marque Portefeuille 100% 🎁</p>
+          <button class="btn btn-sm btn-primary mt-2" id="goAttributionEmpty">
+            <i class="fas fa-trophy"></i> Voir l'attribution 5ᵉ marque
+          </button>
+        </div>
+      `}
+    </div>
+
     <div class="card mb-3">
       <div class="card-title"><i class="fas fa-coins"></i> Détail commissions du mois</div>
       <table class="data-table">
@@ -3988,6 +4112,10 @@ PAGES['a-dashboard'] = async (c) => {
   if (goMlm) goMlm.onclick = () => navigate('a-mlm')
   const goHC = document.getElementById('goHistoComm')
   if (goHC) goHC.onclick = () => navigate('a-historique-comm')
+  const goPF = document.getElementById('goPortefeuilleFull')
+  if (goPF) goPF.onclick = () => navigate('a-restaurants')
+  const goAE = document.getElementById('goAttributionEmpty')
+  if (goAE) goAE.onclick = () => navigate('a-attribution')
 
   // Codes filleul actions
   c.querySelectorAll('[data-copy-code]').forEach(b => b.onclick = () => {
