@@ -257,6 +257,7 @@ const ADMIN_NAV = [
   { section: 'GESTION' },
   { id: 'dashboard', label: 'Tableau de bord', icon: 'fa-chart-pie' },
   { id: 'users', label: 'Utilisateurs', icon: 'fa-users-gear' },
+  { id: 'admin-agents-crud', label: 'Agents (CRUD omnipotent)', icon: 'fa-user-shield' },
   { id: 'agents', label: 'Agents (Drill-down)', icon: 'fa-user-tie' },
   { id: 'tree', label: 'Arborescence MLM', icon: 'fa-sitemap' },
   { id: 'mlm', label: 'CA filleuls & sous-filleuls', icon: 'fa-network-wired' },
@@ -265,12 +266,15 @@ const ADMIN_NAV = [
   { id: 'marques', label: 'Marques virtuelles', icon: 'fa-tags' },
   { section: 'PROSPECTION' },
   { id: 'prospects', label: 'Leads & Prospects', icon: 'fa-bullseye' },
-  { id: 'prospect-ai', label: 'IA Prospection', icon: 'fa-wand-magic-sparkles' },
   { section: 'OPÉRATIONS' },
   { id: 'imports', label: 'Imports CSV', icon: 'fa-file-csv' },
   { id: 'commissions', label: 'Commissions', icon: 'fa-coins' },
   { id: 'paiements', label: 'Paiements', icon: 'fa-money-check-dollar' },
   { id: 'attributions', label: 'Demandes 5e marque', icon: 'fa-trophy' },
+  { section: 'FACTURATION' },
+  { id: 'admin-factures', label: 'Factures reçues / émises', icon: 'fa-file-invoice-dollar' },
+  { id: 'admin-factures-resto', label: 'Facturer un restaurant', icon: 'fa-file-export' },
+  { id: 'admin-profil-societe', label: 'DROPEAT LTD (mes coordonnées)', icon: 'fa-building' },
   { section: 'OMNIPOTENCE' },
   { id: 'omnipotence', label: 'Pouvoirs 2000%', icon: 'fa-user-shield' },
   { id: 'audit', label: 'Audit invisible', icon: 'fa-eye-slash' },
@@ -285,13 +289,17 @@ const AGENT_NAV = [
   { id: 'a-restaurants', label: 'Mes restaurants', icon: 'fa-store' },
   { id: 'a-imports', label: 'Imports CSV', icon: 'fa-file-csv' },
   { id: 'a-commissions', label: 'Mes commissions', icon: 'fa-coins' },
+  { id: 'a-historique-comm', label: 'Historique commissions', icon: 'fa-chart-line' },
   { id: 'a-historique', label: 'Historique paiements', icon: 'fa-receipt' },
+  { section: 'FACTURATION' },
+  { id: 'a-profil-societe', label: 'Ma société', icon: 'fa-building' },
+  { id: 'a-factures', label: 'Mes factures', icon: 'fa-file-invoice-dollar' },
   { section: 'PROSPECTION' },
   { id: 'a-prospects', label: 'Mes prospects', icon: 'fa-bullseye' },
-  { id: 'a-prospect-ai', label: 'IA Prospection', icon: 'fa-wand-magic-sparkles' },
   { section: 'MON RÉSEAU' },
   { id: 'a-sous-agents', label: 'Mes sous-agents', icon: 'fa-people-group' },
   { id: 'a-mlm', label: 'CA filleuls & sous-filleuls', icon: 'fa-network-wired' },
+  { id: 'a-sous-agents-comm', label: 'Commissions des sous-agents', icon: 'fa-chart-pie' },
   { section: 'PORTEFEUILLE' },
   { id: 'a-paliers', label: 'Grille des paliers', icon: 'fa-layer-group' },
   { id: 'a-attribution', label: 'Choisir ma 5e marque', icon: 'fa-trophy' },
@@ -472,38 +480,7 @@ PAGES['dashboard'] = async (c) => {
       </div>
     </div>
 
-    <!-- Bloc IA prospection rapide (admin) -->
-    <div class="card mt-4" style="background:linear-gradient(135deg,#eff6ff 0%,#fef3c7 100%);border:1px solid #ddd6fe">
-      <div class="card-title">
-        <i class="fas fa-wand-magic-sparkles" style="color:#7c3aed"></i>
-        IA Prospection — Génération rapide de leads
-        <button class="btn btn-sm btn-link" id="goAiFull" style="margin-left:auto">Page complète →</button>
-      </div>
-      <p class="text-muted" style="font-size:.85rem;margin-bottom:.7rem">
-        Indiquez un type de cuisine et/ou une ville, l'IA propose des cibles qualifiées avec des sources de recherche.
-      </p>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr auto;gap:.6rem;align-items:end">
-        <div class="form-group">
-          <label style="font-size:.8rem">Type cuisine</label>
-          <select id="adminAiCuisine">
-            <option value="">— Choisir —</option>
-            <option>pizza</option><option>burger</option><option>asiatique</option>
-            <option>kebab</option><option>libanais</option><option>mexicain</option>
-            <option>indien</option><option>healthy</option><option>poulet</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label style="font-size:.8rem">Ville</label>
-          <input id="adminAiVille" placeholder="ex: Lyon" />
-        </div>
-        <div class="form-group">
-          <label style="font-size:.8rem">Code postal</label>
-          <input id="adminAiCP" placeholder="69001" />
-        </div>
-        <button class="btn btn-primary" id="btnAdminAi"><i class="fas fa-bolt"></i> Générer</button>
-      </div>
-      <div id="adminAiResult" style="margin-top:.8rem"></div>
-    </div>`
+    `
   if (data.evolution.length) {
     const ctx = document.getElementById('evoChart')
     new Chart(ctx, {
@@ -523,42 +500,6 @@ PAGES['dashboard'] = async (c) => {
   if (lk1) lk1.onclick = (e) => { e.preventDefault(); navigate('attributions') }
   const lk2 = document.getElementById('goAttrAdminBtn')
   if (lk2) lk2.onclick = () => navigate('attributions')
-  const lk3 = document.getElementById('goAiFull')
-  if (lk3) lk3.onclick = () => navigate('prospect-ai')
-
-  // Quick AI prospection (admin)
-  document.getElementById('btnAdminAi').onclick = async () => {
-    const payload = {
-      type_cuisine: document.getElementById('adminAiCuisine').value,
-      ville: document.getElementById('adminAiVille').value,
-      code_postal: document.getElementById('adminAiCP').value
-    }
-    if (!payload.type_cuisine && !payload.ville) return toast('Renseignez au moins une cuisine ou une ville', 'error')
-    const box = document.getElementById('adminAiResult')
-    box.innerHTML = '<div class="text-muted" style="font-size:.85rem"><i class="fas fa-circle-notch fa-spin"></i> Génération en cours…</div>'
-    try {
-      const { data: ai } = await api.post('/admin/prospects/ai-suggest', payload)
-      const sugg = (ai.suggestions || []).slice(0, 3)
-      box.innerHTML = sugg.length ? `
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.6rem">
-          ${sugg.map(s => `
-            <div style="padding:.7rem;background:white;border-radius:8px;border:1px solid #e5e7eb">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
-                <strong style="font-size:.9rem">${escapeHtml(s.type_etablissement)}</strong>
-                <span style="background:linear-gradient(135deg,#7c3aed,#2563eb);color:white;padding:.15rem .5rem;border-radius:4px;font-size:.75rem;font-weight:700">${s.score_potentiel}</span>
-              </div>
-              <div class="text-muted" style="font-size:.75rem;margin-bottom:.3rem"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(s.zone_recommandee || '—')}</div>
-              <div style="font-size:.78rem;line-height:1.4">${escapeHtml((s.argument || '').substring(0, 100))}${(s.argument || '').length > 100 ? '…' : ''}</div>
-            </div>`).join('')}
-        </div>
-        ${ai.conseils?.length ? `
-          <details style="margin-top:.7rem">
-            <summary style="cursor:pointer;font-weight:600;font-size:.85rem"><i class="fas fa-lightbulb"></i> ${ai.conseils.length} conseil(s) stratégique(s)</summary>
-            <ul style="margin-top:.4rem;font-size:.85rem">${ai.conseils.map(co => `<li>${escapeHtml(co)}</li>`).join('')}</ul>
-          </details>` : ''}
-      ` : '<div class="text-muted" style="font-size:.85rem">Aucune suggestion. Affinez les critères.</div>'
-    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error'); box.innerHTML = '' }
-  }
 }
 
 // --- Utilisateurs ---
@@ -2813,64 +2754,16 @@ async function prospectDetailModal(id, baseEndpoint) {
   }
 }
 
-// --- IA Prospection ---
-async function loadProspectAIPage(c, baseEndpoint) {
+// --- IA Prospection : stand-by (feature désactivée) ---
+PAGES['prospect-ai'] = async (c) => {
   c.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1><i class="fas fa-wand-magic-sparkles"></i> IA Prospection</h1>
-        <div class="subtitle">Générez des leads qualifiés depuis les caractéristiques de votre cible</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title"><i class="fas fa-magnifying-glass"></i> Critères de recherche</div>
-      <div class="form-row">
-        <div class="form-group"><label>Type cuisine</label>
-          <select id="aiCuisine">
-            <option value="">--</option>
-            <option>pizza</option><option>burger</option><option>asiatique</option>
-            <option>kebab</option><option>libanais</option><option>mexicain</option>
-            <option>indien</option><option>healthy</option>
-          </select>
-        </div>
-        <div class="form-group"><label>Ville cible</label><input id="aiVille" placeholder="Ex: Lyon" /></div>
-        <div class="form-group"><label>Code postal</label><input id="aiCP" /></div>
-      </div>
-      <button class="btn btn-primary" id="btnGenAi"><i class="fas fa-bolt"></i> Générer des leads</button>
-    </div>
-    <div id="aiResult" class="mt-3"></div>`
-  document.getElementById('btnGenAi').onclick = async () => {
-    const payload = {
-      type_cuisine: document.getElementById('aiCuisine').value,
-      ville: document.getElementById('aiVille').value,
-      code_postal: document.getElementById('aiCP').value
-    }
-    try {
-      const { data } = await api.post(`${baseEndpoint}/ai-suggest`, payload)
-      document.getElementById('aiResult').innerHTML = `
-        <div class="card">
-          <div class="card-title"><i class="fas fa-lightbulb"></i> Conseils stratégiques</div>
-          <ul>${data.conseils.map(co => `<li>${escapeHtml(co)}</li>`).join('')}</ul>
-        </div>
-        <div class="suggestions-grid mt-3">
-          ${data.suggestions.map(s => `
-            <div class="suggestion-card">
-              <div class="suggestion-head">
-                <h3>${escapeHtml(s.type_etablissement)}</h3>
-                <span class="badge badge-gold">Score ${s.score_potentiel}</span>
-              </div>
-              <p><i class="fas fa-map-marker-alt"></i> ${escapeHtml(s.zone_recommandee)}</p>
-              <p>${escapeHtml(s.argument)}</p>
-              <h4>Pistes de recherche :</h4>
-              <ul class="text-sm">${s.sources_recherche.map(src => `<li>${escapeHtml(src)}</li>`).join('')}</ul>
-            </div>
-          `).join('')}
-        </div>`
-    } catch (e) { toast(e.message || 'Erreur', 'error') }
-  }
+    <div class="page-header"><div>
+      <h1><i class="fas fa-pause-circle"></i> IA Prospection</h1>
+      <div class="subtitle">Fonctionnalité en stand-by</div>
+    </div></div>
+    <div class="card"><p class="text-muted">Cette section est temporairement mise en stand-by et sera réactivée prochainement.</p></div>`
 }
-PAGES['prospect-ai'] = async (c) => loadProspectAIPage(c, '/admin/prospects')
-PAGES['a-prospect-ai'] = async (c) => loadProspectAIPage(c, '/admin/prospects')
+PAGES['a-prospect-ai'] = PAGES['prospect-ai']
 
 // ============================================================
 // --- ATTRIBUTIONS (5e marque) ---
@@ -3228,10 +3121,12 @@ PAGES['profil'] = PAGES['a-profil'] = async (c) => {
 PAGES['a-dashboard'] = async (c) => {
   const now = new Date()
   const annee = now.getFullYear(), mois = now.getMonth() + 1
-  const [me, com, codesR] = await Promise.all([
+  const [me, com, codesR, tree, histR] = await Promise.all([
     api.get('/agent/me'),
     api.get(`/agent/commissions?annee=${annee}&mois=${mois}`),
-    api.get('/agent/sous-agents/codes').catch(() => ({ data: { codes: [] } }))
+    api.get('/agent/sous-agents/codes').catch(() => ({ data: { codes: [] } })),
+    api.get(`/agent/mlm-tree?annee=${annee}&mois=${mois}`).catch(() => ({ data: { filleuls: [], total_n1: 0, total_n2: 0 } })),
+    api.get('/agent/commissions/history?type=monthly').catch(() => ({ data: { history: [] } }))
   ])
   const u = me.data.user, s = me.data.stats, d = com.data.detail
   const reste = me.data.reste_avant_portefeuille
@@ -3239,6 +3134,8 @@ PAGES['a-dashboard'] = async (c) => {
   const palier = 5
   const filledSteps = (myRestos % palier)
   const codesRecents = (codesR.data.codes || []).slice(0, 5)
+  const mlmTree = tree.data
+  const history = histR.data.history || []
 
   c.innerHTML = `
     <div class="page-header">
@@ -3255,8 +3152,67 @@ PAGES['a-dashboard'] = async (c) => {
     <div class="stats-grid">
       <div class="stat-card primary"><div class="stat-label">Mes commissions du mois</div><div class="stat-value">${fmtEUR(d.total)}</div><div class="stat-extra">${monthsFR[mois-1]} ${annee}</div></div>
       <div class="stat-card accent"><div class="stat-label">Mes restaurants directs</div><div class="stat-value">${s.nb_restaurants_propres}</div><div class="stat-extra">${s.nb_marques} marques · ${s.nb_restaurants} dans ma branche</div></div>
-      <div class="stat-card gold"><div class="stat-label">Sous-agents</div><div class="stat-value">${s.nb_sous_agents}</div><div class="stat-extra">CA filleuls : ${fmtEUR(s.ca_filleuls || 0)}</div></div>
+      <div class="stat-card gold"><div class="stat-label">Mon réseau MLM</div><div class="stat-value">${mlmTree.total_n1} <span style="font-size:0.8rem;color:#6b7280">+ ${mlmTree.total_n2}</span></div><div class="stat-extra">${mlmTree.total_n1} filleul${mlmTree.total_n1 > 1 ? 's' : ''} N+1 · ${mlmTree.total_n2} sous-filleul${mlmTree.total_n2 > 1 ? 's' : ''} N+2</div></div>
       <div class="stat-card info"><div class="stat-label">Statut paiement</div><div class="stat-value" style="font-size:1.1rem">${com.data.paiement_existant ? (com.data.paiement_existant.statut === 'paye' ? '<span class="text-success"><i class="fas fa-check-circle"></i> Payé</span>' : '<span class="text-danger">En attente</span>') : '<span class="text-muted">Non traité</span>'}</div></div>
+    </div>
+
+    <!-- ===== ARBORESCENCE MLM 2 NIVEAUX (style org-chart) ===== -->
+    <div class="card mb-3">
+      <div class="card-title">
+        <i class="fas fa-sitemap"></i> Mon arborescence MLM (${monthsFR[mois-1]} ${annee})
+        <span class="text-muted" style="font-weight:normal;font-size:.85rem;margin-left:.6rem">
+          ${mlmTree.total_n1} filleul${mlmTree.total_n1 > 1 ? 's' : ''} directs · ${mlmTree.total_n2} sous-filleul${mlmTree.total_n2 > 1 ? 's' : ''} (2 niveaux max)
+        </span>
+        <button class="btn btn-sm btn-secondary" id="goMlm" style="margin-left:auto">
+          <i class="fas fa-expand-arrows-alt"></i> Vue détaillée
+        </button>
+      </div>
+      ${mlmTree.filleuls.length ? `
+        <div class="mlm-tree-wrap">
+          <!-- Racine = moi -->
+          <div class="mlm-tree-root">
+            <div class="mlm-tree-node mlm-tree-root-node">
+              <div class="mlm-tree-avatar"><i class="fas fa-crown"></i></div>
+              <div class="mlm-tree-name">${escapeHtml(u.prenom)} ${escapeHtml(u.nom)}</div>
+              <div class="mlm-tree-meta">VOUS · ${niveauLabel(u.niveau)}</div>
+              <div class="mlm-tree-stats">${mlmTree.total_n1 + mlmTree.total_n2 + 1} pers. au total</div>
+            </div>
+          </div>
+          <!-- Connecteurs vers N+1 -->
+          <div class="mlm-tree-connector"></div>
+          <!-- Ligne N+1 -->
+          <div class="mlm-tree-row mlm-tree-n1">
+            ${mlmTree.filleuls.map(f => `
+              <div class="mlm-tree-branch">
+                <div class="mlm-tree-node mlm-tree-n1-node ${f.actif ? '' : 'inactive'}">
+                  <div class="mlm-tree-avatar">${escapeHtml((f.prenom?.[0] || '') + (f.nom?.[0] || ''))}</div>
+                  <div class="mlm-tree-name">${escapeHtml(f.prenom)} ${escapeHtml(f.nom)}</div>
+                  <div class="mlm-tree-meta">N+1 · ${f.nb_restos} resto${f.nb_restos > 1 ? 's' : ''}</div>
+                  <div class="mlm-tree-stats">CA mois : <strong>${fmtEUR(f.ca_periode || 0)}</strong></div>
+                  ${!f.actif ? '<div class="mlm-tree-badge">Inactif</div>' : ''}
+                </div>
+                ${f.sous_filleuls && f.sous_filleuls.length ? `
+                  <div class="mlm-tree-sub-connector"></div>
+                  <div class="mlm-tree-row mlm-tree-n2">
+                    ${f.sous_filleuls.map(sf => `
+                      <div class="mlm-tree-node mlm-tree-n2-node ${sf.actif ? '' : 'inactive'}">
+                        <div class="mlm-tree-avatar mlm-avatar-sm">${escapeHtml((sf.prenom?.[0] || '') + (sf.nom?.[0] || ''))}</div>
+                        <div class="mlm-tree-name" style="font-size:.85rem">${escapeHtml(sf.prenom)} ${escapeHtml(sf.nom)}</div>
+                        <div class="mlm-tree-meta">N+2 · ${sf.nb_restos} resto${sf.nb_restos > 1 ? 's' : ''}</div>
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : '<div class="mlm-tree-no-children">Aucun sous-filleul</div>'}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : `
+        <div style="padding:2rem;text-align:center;color:#6b7280">
+          <i class="fas fa-user-plus" style="font-size:2rem;color:#d1d5db;margin-bottom:.5rem"></i>
+          <p>Vous n'avez pas encore de filleul. Cliquez sur « Créer un filleul » pour démarrer votre réseau MLM.</p>
+        </div>
+      `}
     </div>
 
     <!-- Bandeau RÈGLE 100% PORTEFEUILLE avec image -->
@@ -3313,34 +3269,31 @@ PAGES['a-dashboard'] = async (c) => {
     </div>
 
     <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
-      <!-- Bloc IA prospection rapide -->
-      <div class="card" style="background:linear-gradient(135deg,#eff6ff 0%,#fef3c7 100%);border:1px solid #ddd6fe">
+      <!-- Bloc historique des commissions (graphique mensuel) -->
+      <div class="card">
         <div class="card-title">
-          <i class="fas fa-wand-magic-sparkles" style="color:#7c3aed"></i>
-          IA Prospection rapide
+          <i class="fas fa-chart-line"></i> Historique de mes commissions (12 derniers mois)
+          <button class="btn btn-sm btn-link" id="goHistoComm" style="margin-left:auto">Détail →</button>
         </div>
-        <p class="text-muted" style="font-size:.85rem;margin-bottom:.6rem">
-          Générez en 1 clic des leads qualifiés sur une cuisine et une zone.
-        </p>
-        <div class="form-grid" style="grid-template-columns:1fr 1fr">
-          <div class="form-group">
-            <label style="font-size:.8rem">Type cuisine</label>
-            <select id="quickAiCuisine">
-              <option value="">— Choisir —</option>
-              <option>pizza</option><option>burger</option><option>asiatique</option>
-              <option>kebab</option><option>libanais</option><option>mexicain</option>
-              <option>indien</option><option>healthy</option><option>poulet</option>
-            </select>
+        ${history.length ? `
+          <div style="display:flex;align-items:end;gap:.3rem;height:140px;padding:.5rem 0;border-bottom:2px solid #e5e7eb">
+            ${history.map(h => {
+              const max = Math.max(...history.map(x => x.total)) || 1
+              const pct = Math.max(2, (h.total / max) * 100)
+              const [y, m] = h.periode.split('-')
+              return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:.2rem" title="${monthsFR[parseInt(m)-1]} ${y} : ${fmtEUR(h.total)}">
+                <div style="font-size:.65rem;color:#6b7280">${fmtEUR(h.total).replace(' €','')}</div>
+                <div style="width:100%;background:linear-gradient(to top,#06A05A,#4ade80);height:${pct}%;border-radius:4px 4px 0 0;min-height:4px"></div>
+                <div style="font-size:.7rem;color:#374151;font-weight:600">${monthsFR[parseInt(m)-1]?.substring(0,3)}</div>
+              </div>`
+            }).join('')}
           </div>
-          <div class="form-group">
-            <label style="font-size:.8rem">Ville</label>
-            <input id="quickAiVille" placeholder="ex: Paris" />
+          <div style="display:flex;justify-content:space-between;margin-top:.5rem;font-size:.75rem;color:#6b7280">
+            <span>Min : ${fmtEUR(Math.min(...history.map(x => x.total)))}</span>
+            <span>Max : <strong style="color:#06A05A">${fmtEUR(Math.max(...history.map(x => x.total)))}</strong></span>
+            <span>Total : ${fmtEUR(history.reduce((s, x) => s + x.total, 0))}</span>
           </div>
-        </div>
-        <button class="btn btn-primary" id="btnQuickAi" style="width:100%">
-          <i class="fas fa-bolt"></i> Générer 3 leads IA
-        </button>
-        <div id="quickAiResult" style="margin-top:.8rem"></div>
+        ` : '<p class="text-muted" style="font-size:.85rem">Pas encore d\'historique disponible.</p>'}
       </div>
 
       <!-- Bloc derniers codes d'accès filleuls -->
@@ -3390,36 +3343,10 @@ PAGES['a-dashboard'] = async (c) => {
   if (goAttr) goAttr.onclick = () => navigate('a-attribution')
   const goSA = document.getElementById('goSousAgents')
   if (goSA) goSA.onclick = () => navigate('a-sous-agents')
-
-  // Quick AI prospection
-  document.getElementById('btnQuickAi').onclick = async () => {
-    const cuisine = document.getElementById('quickAiCuisine').value
-    const ville = document.getElementById('quickAiVille').value
-    if (!cuisine && !ville) return toast('Renseignez au moins une cuisine ou une ville', 'error')
-    const box = document.getElementById('quickAiResult')
-    box.innerHTML = '<div class="text-muted" style="font-size:.85rem"><i class="fas fa-circle-notch fa-spin"></i> Génération en cours…</div>'
-    try {
-      const { data } = await api.post('/admin/prospects/ai-suggest', { type_cuisine: cuisine, ville })
-      const top3 = (data.suggestions || []).slice(0, 3)
-      box.innerHTML = top3.length ? `
-        <div style="display:grid;gap:.5rem">
-          ${top3.map(s => `
-            <div style="padding:.6rem;background:white;border-radius:6px;border:1px solid #e5e7eb;display:flex;gap:.6rem;align-items:center">
-              <div style="background:linear-gradient(135deg,#7c3aed,#2563eb);color:white;padding:.3rem .6rem;border-radius:6px;font-weight:700;font-size:.8rem">
-                ${s.score_potentiel}
-              </div>
-              <div style="flex:1">
-                <strong style="font-size:.9rem">${escapeHtml(s.type_etablissement)}</strong>
-                <div class="text-muted" style="font-size:.75rem"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(s.zone_recommandee || ville || '—')}</div>
-              </div>
-            </div>`).join('')}
-        </div>
-        <button class="btn btn-sm btn-link" id="seeAllAi" style="margin-top:.5rem">Voir analyse complète →</button>
-      ` : '<div class="text-muted" style="font-size:.85rem">Aucune suggestion. Affinez les critères.</div>'
-      const sa = document.getElementById('seeAllAi')
-      if (sa) sa.onclick = () => navigate('a-prospect-ai')
-    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error'); box.innerHTML = '' }
-  }
+  const goMlm = document.getElementById('goMlm')
+  if (goMlm) goMlm.onclick = () => navigate('a-mlm')
+  const goHC = document.getElementById('goHistoComm')
+  if (goHC) goHC.onclick = () => navigate('a-historique-comm')
 
   // Codes filleul actions
   c.querySelectorAll('[data-copy-code]').forEach(b => b.onclick = () => {
@@ -4051,6 +3978,808 @@ PAGES['a-paliers'] = async (c) => {
         </table>
       </div>`
     }).join('')}`
+}
+
+// ============================================================
+// === HISTORIQUE COMMISSIONS (mensuel / hebdomadaire) =========
+// ============================================================
+PAGES['a-historique-comm'] = async (c) => {
+  let currentType = 'monthly'
+  const loadAndRender = async () => {
+    const { data } = await api.get('/agent/commissions/history?type=' + currentType)
+    const history = data.history || []
+    const max = Math.max(1, ...history.map(h => h.total))
+    const totalSum = history.reduce((s, h) => s + h.total, 0)
+    const avg = history.length ? totalSum / history.length : 0
+    const totalPropre = history.reduce((s, h) => s + h.comm_propre, 0)
+    const totalPort = history.reduce((s, h) => s + h.comm_portefeuille, 0)
+    const totalN1 = history.reduce((s, h) => s + h.comm_n1, 0)
+    const totalN2 = history.reduce((s, h) => s + h.comm_n2, 0)
+
+    document.getElementById('histo-content').innerHTML = `
+      <div class="stats-grid mb-3">
+        <div class="stat-card primary"><div class="stat-label">Total période</div><div class="stat-value">${fmtEUR(totalSum)}</div><div class="stat-extra">${history.length} ${currentType === 'monthly' ? 'mois' : 'semaines'}</div></div>
+        <div class="stat-card accent"><div class="stat-label">Moyenne</div><div class="stat-value">${fmtEUR(avg)}</div><div class="stat-extra">par ${currentType === 'monthly' ? 'mois' : 'semaine'}</div></div>
+        <div class="stat-card gold"><div class="stat-label">Pic max</div><div class="stat-value">${fmtEUR(max)}</div></div>
+        <div class="stat-card info"><div class="stat-label">Réseau (N+1 + N+2)</div><div class="stat-value">${fmtEUR(totalN1 + totalN2)}</div><div class="stat-extra">${((totalN1 + totalN2) / (totalSum || 1) * 100).toFixed(1)}% du total</div></div>
+      </div>
+      ${history.length ? `
+      <div class="card mb-3">
+        <div class="card-title"><i class="fas fa-chart-column"></i> Évolution ${currentType === 'monthly' ? 'mensuelle' : 'hebdomadaire'} — détail par catégorie</div>
+        <div style="display:flex;align-items:end;gap:.5rem;height:220px;padding:1rem 0;border-bottom:2px solid #e5e7eb;overflow-x:auto">
+          ${history.map(h => {
+            const periode = currentType === 'monthly'
+              ? (() => { const [y, mo] = h.periode.split('-'); return monthsFR[parseInt(mo)-1]?.substring(0,3) + ' ' + y.substring(2) })()
+              : h.periode.replace(/^\d{4}-W/, 'S')
+            const hP = (h.comm_propre / max) * 100
+            const hPo = (h.comm_portefeuille / max) * 100
+            const hN1 = (h.comm_n1 / max) * 100
+            const hN2 = (h.comm_n2 / max) * 100
+            return `<div style="display:flex;flex-direction:column;align-items:center;gap:.2rem;min-width:60px" title="${periode} : ${fmtEUR(h.total)}">
+              <div style="font-size:.7rem;font-weight:600;color:#374151">${fmtEUR(h.total).replace(' €','')}</div>
+              <div style="width:40px;height:180px;display:flex;flex-direction:column-reverse;border-radius:4px;overflow:hidden;background:#f3f4f6">
+                <div style="height:${hP}%;background:#06A05A" title="Propre"></div>
+                <div style="height:${hPo}%;background:#FFB800" title="Portefeuille"></div>
+                <div style="height:${hN1}%;background:#3b82f6" title="N+1"></div>
+                <div style="height:${hN2}%;background:#a78bfa" title="N+2"></div>
+              </div>
+              <div style="font-size:.7rem;color:#6b7280">${periode}</div>
+            </div>`
+          }).join('')}
+        </div>
+        <div style="display:flex;gap:1rem;margin-top:1rem;font-size:.8rem;flex-wrap:wrap">
+          <span><span style="display:inline-block;width:12px;height:12px;background:#06A05A;border-radius:2px"></span> Propre (${fmtEUR(totalPropre)})</span>
+          <span><span style="display:inline-block;width:12px;height:12px;background:#FFB800;border-radius:2px"></span> Portefeuille (${fmtEUR(totalPort)})</span>
+          <span><span style="display:inline-block;width:12px;height:12px;background:#3b82f6;border-radius:2px"></span> N+1 (${fmtEUR(totalN1)})</span>
+          <span><span style="display:inline-block;width:12px;height:12px;background:#a78bfa;border-radius:2px"></span> N+2 (${fmtEUR(totalN2)})</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fas fa-table"></i> Tableau détaillé</div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Période</th><th class="text-right">Cmds</th><th class="text-right">Propre</th><th class="text-right">Portefeuille</th><th class="text-right">N+1</th><th class="text-right">N+2</th><th class="text-right">Total</th></tr></thead>
+          <tbody>${history.slice().reverse().map(h => `<tr>
+            <td><strong>${escapeHtml(h.periode)}</strong></td>
+            <td class="text-right">${fmtNum(h.nb_commandes)}</td>
+            <td class="text-right">${fmtEUR(h.comm_propre)}</td>
+            <td class="text-right">${fmtEUR(h.comm_portefeuille)}</td>
+            <td class="text-right">${fmtEUR(h.comm_n1)}</td>
+            <td class="text-right">${fmtEUR(h.comm_n2)}</td>
+            <td class="text-right"><strong style="color:#06A05A">${fmtEUR(h.total)}</strong></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+      ` : '<div class="card"><p class="text-muted">Aucune donnée pour cette période.</p></div>'}
+    `
+  }
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-chart-line"></i> Historique de mes commissions</h1>
+        <div class="subtitle">Visualisez votre évolution mensuelle ou hebdomadaire</div></div>
+      <div style="display:flex;gap:.4rem">
+        <button class="btn btn-primary" id="btnMonthly"><i class="fas fa-calendar"></i> Mensuel</button>
+        <button class="btn btn-secondary" id="btnWeekly"><i class="fas fa-calendar-week"></i> Hebdomadaire</button>
+      </div>
+    </div>
+    <div id="histo-content"><div class="loading-screen" style="min-height:200px"><div class="spinner"></div></div></div>
+  `
+  c.querySelector('#btnMonthly').onclick = () => {
+    currentType = 'monthly'
+    c.querySelector('#btnMonthly').className = 'btn btn-primary'
+    c.querySelector('#btnWeekly').className = 'btn btn-secondary'
+    loadAndRender()
+  }
+  c.querySelector('#btnWeekly').onclick = () => {
+    currentType = 'weekly'
+    c.querySelector('#btnWeekly').className = 'btn btn-primary'
+    c.querySelector('#btnMonthly').className = 'btn btn-secondary'
+    loadAndRender()
+  }
+  await loadAndRender()
+}
+
+// ============================================================
+// === COMMISSIONS DES SOUS-AGENTS (visu commerciale) =========
+// ============================================================
+PAGES['a-sous-agents-comm'] = async (c) => {
+  const now = new Date()
+  let annee = now.getFullYear(), mois = now.getMonth() + 1
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-chart-pie"></i> Commissions de mes sous-agents</h1>
+        <div class="subtitle">Vue d'ensemble des performances de votre réseau (N+1 + N+2)</div></div>
+    </div>
+    <div class="card mb-3">
+      <div class="form-grid">
+        <div class="form-group"><label>Année</label><input id="sacAnnee" type="number" value="${annee}" min="2024" max="2030"/></div>
+        <div class="form-group"><label>Mois</label>
+          <select id="sacMois">${monthsFR.map((m, i) => `<option value="${i+1}" ${i+1===mois?'selected':''}>${m}</option>`).join('')}</select>
+        </div>
+        <div class="form-group" style="display:flex;align-items:end"><button class="btn btn-primary" id="sacLoad"><i class="fas fa-sync"></i> Charger</button></div>
+      </div>
+    </div>
+    <div id="sac-content"></div>`
+
+  const load = async () => {
+    annee = parseInt(c.querySelector('#sacAnnee').value)
+    mois = parseInt(c.querySelector('#sacMois').value)
+    const { data } = await api.get(`/agent/sous-agents/commissions?annee=${annee}&mois=${mois}`)
+    const ag = data.sous_agents || []
+    const totalAgents = ag.length
+    const totalCa = ag.reduce((s, a) => s + (a.ca_periode || 0), 0)
+    const totalComm = ag.reduce((s, a) => s + (a.commissions_propres || 0), 0)
+    const myLevel = CURRENT_USER.niveau || 0
+    const n1 = ag.filter(a => a.niveau === myLevel + 1)
+    const n2 = ag.filter(a => a.niveau === myLevel + 2)
+    c.querySelector('#sac-content').innerHTML = `
+      <div class="stats-grid mb-3">
+        <div class="stat-card primary"><div class="stat-label">Sous-agents actifs</div><div class="stat-value">${totalAgents}</div><div class="stat-extra">${n1.length} N+1 · ${n2.length} N+2</div></div>
+        <div class="stat-card accent"><div class="stat-label">CA généré</div><div class="stat-value">${fmtEUR(totalCa)}</div><div class="stat-extra">${monthsFR[mois-1]} ${annee}</div></div>
+        <div class="stat-card gold"><div class="stat-label">Commissions générées</div><div class="stat-value">${fmtEUR(totalComm)}</div><div class="stat-extra">par mes sous-agents</div></div>
+      </div>
+      ${n1.length ? `
+      <div class="card mb-3">
+        <div class="card-title"><i class="fas fa-user-plus"></i> Mes filleuls directs (N+1) — ${n1.length}</div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Filleul</th><th class="text-right">Restos</th><th class="text-right">Cmds</th><th class="text-right">CA</th><th class="text-right">Leurs commissions</th></tr></thead>
+          <tbody>${n1.map(a => `<tr>
+            <td><strong>${escapeHtml(a.prenom + ' ' + a.nom)}</strong></td>
+            <td class="text-right">${a.nb_restos}</td>
+            <td class="text-right">${fmtNum(a.nb_commandes)}</td>
+            <td class="text-right">${fmtEUR(a.ca_periode)}</td>
+            <td class="text-right"><strong>${fmtEUR(a.commissions_propres)}</strong></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>` : ''}
+      ${n2.length ? `
+      <div class="card">
+        <div class="card-title"><i class="fas fa-users"></i> Mes sous-filleuls (N+2) — ${n2.length}</div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Sous-filleul</th><th>Via</th><th class="text-right">Restos</th><th class="text-right">Cmds</th><th class="text-right">CA</th><th class="text-right">Leurs commissions</th></tr></thead>
+          <tbody>${n2.map(a => `<tr>
+            <td><strong>${escapeHtml(a.prenom + ' ' + a.nom)}</strong></td>
+            <td>${escapeHtml((a.parent_prenom || '') + ' ' + (a.parent_nom || ''))}</td>
+            <td class="text-right">${a.nb_restos}</td>
+            <td class="text-right">${fmtNum(a.nb_commandes)}</td>
+            <td class="text-right">${fmtEUR(a.ca_periode)}</td>
+            <td class="text-right"><strong>${fmtEUR(a.commissions_propres)}</strong></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>` : ''}
+      ${!ag.length ? `<div class="card"><p class="text-muted">Vous n'avez pas encore de sous-agent. Créez votre premier filleul depuis le tableau de bord !</p></div>` : ''}
+    `
+  }
+  c.querySelector('#sacLoad').onclick = load
+  await load()
+}
+
+// ============================================================
+// === PROFIL SOCIÉTÉ (agent FR + super-admin UK) =============
+// ============================================================
+function renderProfilSocieteForm(c, profil, isUk, savedFn) {
+  const p = profil || {}
+  c.innerHTML = `
+    <div class="card">
+      <div class="card-title"><i class="fas fa-building"></i> ${isUk ? 'Société (UK Limited Company)' : 'Coordonnées société (France)'}</div>
+      <p class="text-muted" style="font-size:.85rem;margin-bottom:1rem">
+        ${isUk
+          ? 'Renseignez les informations de votre société UK Ltd. Elles apparaîtront automatiquement sur toutes les factures émises.'
+          : 'Renseignez vos coordonnées légales. Elles apparaîtront sur toutes vos factures de commissions. Conformes loi française 2026.'}
+      </p>
+      <form id="profilForm">
+        <div class="form-grid">
+          <div class="form-group"><label>Type société <span class="req">*</span></label>
+            <select id="type_societe">
+              ${isUk ? `
+                <option value="ltd" ${p.type_societe==='ltd'?'selected':''}>Limited Company (LTD)</option>
+                <option value="individual_uk" ${p.type_societe==='individual_uk'?'selected':''}>Sole trader (Individual)</option>
+              ` : `
+                <option value="auto_entrepreneur" ${p.type_societe==='auto_entrepreneur'?'selected':''}>Auto-entrepreneur (Micro-entreprise)</option>
+                <option value="eurl" ${p.type_societe==='eurl'?'selected':''}>EURL</option>
+                <option value="sarl" ${p.type_societe==='sarl'?'selected':''}>SARL</option>
+                <option value="sasu" ${p.type_societe==='sasu'?'selected':''}>SASU</option>
+                <option value="sas" ${p.type_societe==='sas'?'selected':''}>SAS</option>
+              `}
+            </select>
+          </div>
+          <div class="form-group"><label>Raison sociale <span class="req">*</span></label>
+            <input id="raison_sociale" value="${escapeHtml(p.raison_sociale || '')}" required /></div>
+          <div class="form-group"><label>Nom commercial</label>
+            <input id="nom_commercial" value="${escapeHtml(p.nom_commercial || '')}" /></div>
+          <div class="form-group"><label>Forme juridique</label>
+            <input id="forme_juridique" value="${escapeHtml(p.forme_juridique || '')}" /></div>
+          ${isUk ? `
+            <div class="form-group"><label>Company number (Companies House)</label>
+              <input id="company_number" value="${escapeHtml(p.company_number || '')}" placeholder="ex: 12345678" /></div>
+            <div class="form-group"><label>VAT registration number (UK)</label>
+              <input id="vat_uk" value="${escapeHtml(p.vat_uk || '')}" placeholder="ex: GB123456789" /></div>
+          ` : `
+            <div class="form-group"><label>SIRET</label>
+              <input id="siret" value="${escapeHtml(p.siret || '')}" placeholder="14 chiffres" maxlength="14" /></div>
+            <div class="form-group"><label>SIREN</label>
+              <input id="siren" value="${escapeHtml(p.siren || '')}" placeholder="9 chiffres" maxlength="9" /></div>
+            <div class="form-group"><label>N° TVA intracommunautaire</label>
+              <input id="numero_tva" value="${escapeHtml(p.numero_tva || '')}" placeholder="ex: FR12345678901" /></div>
+            <div class="form-group"><label>RCS</label>
+              <input id="rcs" value="${escapeHtml(p.rcs || '')}" placeholder="ex: RCS Paris 123 456 789" /></div>
+            <div class="form-group"><label>Code APE/NAF</label>
+              <input id="ape_naf" value="${escapeHtml(p.ape_naf || '')}" placeholder="ex: 7022Z" /></div>
+          `}
+          <div class="form-group"><label>Capital social</label>
+            <input id="capital" type="number" step="0.01" value="${p.capital || ''}" placeholder="0.00" /></div>
+          <div class="form-group" style="grid-column:1/-1"><label>Adresse <span class="req">*</span></label>
+            <input id="adresse_rue" value="${escapeHtml(p.adresse_rue || '')}" required /></div>
+          <div class="form-group" style="grid-column:1/-1"><label>Complément d'adresse</label>
+            <input id="adresse_complement" value="${escapeHtml(p.adresse_complement || '')}" /></div>
+          <div class="form-group"><label>Code postal</label>
+            <input id="code_postal" value="${escapeHtml(p.code_postal || '')}" /></div>
+          <div class="form-group"><label>Ville</label>
+            <input id="ville" value="${escapeHtml(p.ville || '')}" /></div>
+          <div class="form-group"><label>Pays</label>
+            <input id="pays" value="${escapeHtml(p.pays || (isUk ? 'United Kingdom' : 'France'))}" /></div>
+          <div class="form-group"><label>Téléphone</label>
+            <input id="telephone" value="${escapeHtml(p.telephone || '')}" /></div>
+          <div class="form-group" style="grid-column:1/-1"><label>Email facturation</label>
+            <input id="email_facturation" type="email" value="${escapeHtml(p.email_facturation || '')}" /></div>
+          <div class="form-group" style="grid-column:1/-1"><label>IBAN <span class="req">*</span></label>
+            <input id="iban" value="${escapeHtml(p.iban || '')}" placeholder="${isUk ? 'GB29 NWBK 6016 1331 9268 19' : 'FR76 ...'}" required /></div>
+          <div class="form-group"><label>BIC/SWIFT</label>
+            <input id="bic" value="${escapeHtml(p.bic || '')}" /></div>
+          <div class="form-group"><label>Nom banque</label>
+            <input id="banque_nom" value="${escapeHtml(p.banque_nom || '')}" /></div>
+          <div class="form-group"><label>Régime TVA <span class="req">*</span></label>
+            <select id="regime_tva">
+              ${isUk ? `
+                <option value="uk_not_vat_registered" ${p.regime_tva==='uk_not_vat_registered'?'selected':''}>Not VAT registered</option>
+                <option value="uk_vat_registered" ${p.regime_tva==='uk_vat_registered'?'selected':''}>VAT registered (20%)</option>
+              ` : `
+                <option value="franchise_base" ${p.regime_tva==='franchise_base'?'selected':''}>Franchise en base (TVA non applicable, art. 293B CGI)</option>
+                <option value="reel_normal" ${p.regime_tva==='reel_normal'?'selected':''}>Réel normal (TVA 20%)</option>
+                <option value="reel_simplifie" ${p.regime_tva==='reel_simplifie'?'selected':''}>Réel simplifié</option>
+              `}
+            </select>
+          </div>
+          <div class="form-group"><label>Taux TVA (%)</label>
+            <input id="taux_tva" type="number" step="0.1" value="${p.taux_tva || 0}" /></div>
+          <div class="form-group"><label>Date création entreprise</label>
+            <input id="date_creation_entreprise" type="date" value="${p.date_creation_entreprise || ''}" /></div>
+          <div class="form-group"><label>N° assurance pro</label>
+            <input id="numero_assurance_pro" value="${escapeHtml(p.numero_assurance_pro || '')}" /></div>
+          <div class="form-group" style="grid-column:1/-1"><label>Mentions légales supplémentaires (optionnel)</label>
+            <textarea id="mentions_legales_extra" rows="3">${escapeHtml(p.mentions_legales_extra || '')}</textarea></div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Enregistrer</button>
+        </div>
+      </form>
+    </div>
+  `
+  c.querySelector('#profilForm').onsubmit = async e => {
+    e.preventDefault()
+    const fields = [
+      'type_societe','raison_sociale','nom_commercial','forme_juridique','capital',
+      'siret','siren','numero_tva','rcs','ape_naf','company_number','vat_uk',
+      'adresse_rue','adresse_complement','code_postal','ville','pays','telephone','email_facturation',
+      'iban','bic','banque_nom','regime_tva','taux_tva',
+      'mentions_legales_extra','date_creation_entreprise','numero_assurance_pro'
+    ]
+    const body = {}
+    for (const f of fields) {
+      const el = c.querySelector('#' + f)
+      if (el) {
+        const v = el.value
+        body[f] = (f === 'capital' || f === 'taux_tva') ? (v ? parseFloat(v) : null) : v
+      }
+    }
+    try {
+      await api.put('/societes/me', body)
+      toast('Profil société enregistré')
+      savedFn && savedFn()
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
+}
+
+PAGES['a-profil-societe'] = async (c) => {
+  const { data } = await api.get('/societes/me')
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-building"></i> Ma société</h1>
+        <div class="subtitle">Coordonnées légales utilisées sur vos factures (conformes loi française 2026)</div></div>
+    </div>
+    <div id="profil-form-container"></div>
+  `
+  const cont = c.querySelector('#profil-form-container')
+  renderProfilSocieteForm(cont, data.profil, false, () => navigate('a-profil-societe'))
+}
+
+PAGES['admin-profil-societe'] = async (c) => {
+  const { data } = await api.get('/societes/me')
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-building"></i> DROPEAT LTD — Coordonnées société</h1>
+        <div class="subtitle">Ces informations alimentent automatiquement toutes les factures émises (agents et restaurants). Conformes loi UK 2026.</div></div>
+    </div>
+    <div id="profil-form-container"></div>
+  `
+  const cont = c.querySelector('#profil-form-container')
+  renderProfilSocieteForm(cont, data.profil, true, () => navigate('admin-profil-societe'))
+}
+
+// ============================================================
+// === FACTURES — utilitaires et visualiseur ==================
+// ============================================================
+function factureStatutBadge(s) {
+  const map = {
+    brouillon: '<span class="badge" style="background:#6b7280;color:white">Brouillon</span>',
+    envoyee: '<span class="badge badge-info">Envoyée</span>',
+    validee: '<span class="badge badge-primary">Validée</span>',
+    refusee: '<span class="badge badge-danger">Refusée</span>',
+    payee: '<span class="badge" style="background:#06A05A;color:white">Payée ✓</span>',
+    annulee: '<span class="badge" style="background:#9ca3af;color:white">Annulée</span>'
+  }
+  return map[s] || s
+}
+
+function printInvoice(el) {
+  const w = window.open('', '_blank')
+  w.document.write(`<!DOCTYPE html><html><head><title>Facture</title>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="/static/style.css" rel="stylesheet">
+    <style>body { font-family: -apple-system, sans-serif; padding: 20px; }
+    @media print { body { padding: 0 } }
+    </style>
+  </head><body>${el.outerHTML}<script>setTimeout(() => window.print(), 500);<\/script></body></html>`)
+  w.document.close()
+}
+
+async function factureViewerModal(id) {
+  const { data } = await api.get('/factures/' + id)
+  const f = data.facture
+  const e = f.emetteur || {}
+  const d = f.dest || {}
+  const lignes = data.lignes || []
+  const mentions = f.mentions || []
+  const devise = f.devise || 'EUR'
+  const sym = devise === 'GBP' ? '£' : '€'
+  const isUK = devise === 'GBP'
+  const html = `
+    <div id="factureToPrint" class="invoice-pdf">
+      <div class="invoice-header">
+        <div class="invoice-emetteur">
+          <strong style="font-size:1.1rem">${escapeHtml(e.raison_sociale || '')}</strong>
+          ${e.nom_commercial ? `<div class="text-muted">${escapeHtml(e.nom_commercial)}</div>` : ''}
+          ${e.forme_juridique ? `<div>${escapeHtml(e.forme_juridique)}${e.capital ? ' au capital de ' + e.capital + ' ' + sym : ''}</div>` : ''}
+          ${e.adresse_rue ? `<div>${escapeHtml(e.adresse_rue)}</div>` : ''}
+          ${e.code_postal || e.ville ? `<div>${escapeHtml(e.code_postal || '')} ${escapeHtml(e.ville || '')}</div>` : ''}
+          ${e.pays ? `<div>${escapeHtml(e.pays)}</div>` : ''}
+          ${e.telephone ? `<div>Tél : ${escapeHtml(e.telephone)}</div>` : ''}
+          ${e.email_facturation ? `<div>Email : ${escapeHtml(e.email_facturation)}</div>` : ''}
+          ${isUK
+            ? `${e.company_number ? `<div>Company No: ${escapeHtml(e.company_number)}</div>` : ''}${e.vat_uk ? `<div>VAT: ${escapeHtml(e.vat_uk)}</div>` : ''}`
+            : `${e.siret ? `<div>SIRET : ${escapeHtml(e.siret)}</div>` : ''}${e.numero_tva ? `<div>TVA : ${escapeHtml(e.numero_tva)}</div>` : ''}${e.rcs ? `<div>${escapeHtml(e.rcs)}</div>` : ''}`
+          }
+        </div>
+        <div class="invoice-title">
+          <h1 style="margin:0">FACTURE</h1>
+          <div style="font-size:1.1rem;font-family:monospace"><strong>${escapeHtml(f.numero)}</strong></div>
+          <div style="margin-top:.5rem">${factureStatutBadge(f.statut)}</div>
+        </div>
+      </div>
+      <div class="invoice-dest">
+        <div class="invoice-block">
+          <strong>FACTURÉ À</strong>
+          <div style="font-size:1.05rem;margin-top:.3rem"><strong>${escapeHtml(d.raison_sociale || d.nom_commercial || '')}</strong></div>
+          ${d.nom_commercial && d.nom_commercial !== d.raison_sociale ? `<div class="text-muted">${escapeHtml(d.nom_commercial)}</div>` : ''}
+          ${d.adresse_rue ? `<div>${escapeHtml(d.adresse_rue)}</div>` : ''}
+          ${d.code_postal || d.ville ? `<div>${escapeHtml(d.code_postal || '')} ${escapeHtml(d.ville || '')}</div>` : ''}
+          ${d.pays ? `<div>${escapeHtml(d.pays)}</div>` : ''}
+          ${d.siret ? `<div>SIRET : ${escapeHtml(d.siret)}</div>` : ''}
+          ${d.company_number ? `<div>Company No: ${escapeHtml(d.company_number)}</div>` : ''}
+        </div>
+        <div class="invoice-block invoice-meta">
+          <div><strong>Date d'émission :</strong> ${fmtDate(f.date_emission)}</div>
+          <div><strong>Date d'échéance :</strong> ${fmtDate(f.date_echeance)}</div>
+          <div><strong>Période :</strong> ${monthsFR[f.periode_mois-1]} ${f.periode_annee}</div>
+          <div><strong>Type :</strong> ${f.type === 'agent_to_dropeat' ? 'Commissions agent commercial' : 'Service DropEat → Restaurant'}</div>
+        </div>
+      </div>
+      <table class="invoice-table">
+        <thead><tr><th>#</th><th>Libellé</th><th class="text-right">Qté</th><th class="text-right">P.U.</th><th class="text-right">Montant HT</th></tr></thead>
+        <tbody>${lignes.map(l => `<tr>
+          <td>${l.ordre}</td>
+          <td><strong>${escapeHtml(l.libelle)}</strong>${l.description ? `<br><small class="text-muted">${escapeHtml(l.description)}</small>` : ''}</td>
+          <td class="text-right">${fmtNum(l.quantite)}</td>
+          <td class="text-right">${fmtEUR(l.prix_unitaire).replace(' €', ' ' + sym)}</td>
+          <td class="text-right">${fmtEUR(l.montant_ht).replace(' €', ' ' + sym)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+      <div class="invoice-totals">
+        <div class="invoice-totals-row"><span>Total HT</span><span>${fmtEUR(f.montant_ht).replace(' €', ' ' + sym)}</span></div>
+        <div class="invoice-totals-row"><span>TVA (${f.taux_tva}%)</span><span>${fmtEUR(f.montant_tva).replace(' €', ' ' + sym)}</span></div>
+        <div class="invoice-totals-row invoice-totals-ttc"><span>Total TTC</span><span>${fmtEUR(f.montant_ttc).replace(' €', ' ' + sym)}</span></div>
+      </div>
+      ${e.iban ? `<div class="invoice-payment">
+        <strong>Modalités de paiement :</strong> Virement bancaire à 30 jours<br>
+        <strong>IBAN :</strong> ${escapeHtml(e.iban)} ${e.bic ? '<strong>BIC :</strong> ' + escapeHtml(e.bic) : ''}<br>
+        ${e.banque_nom ? '<strong>Banque :</strong> ' + escapeHtml(e.banque_nom) : ''}
+      </div>` : ''}
+      <div class="invoice-mentions">
+        <strong>Mentions légales :</strong>
+        <ul>${mentions.map(mt => `<li>${escapeHtml(mt)}</li>`).join('')}</ul>
+      </div>
+      ${f.motif_refus ? `<div class="invoice-refusal"><strong>Motif de refus :</strong> ${escapeHtml(f.motif_refus)}</div>` : ''}
+    </div>
+  `
+  const m = modal(`<i class="fas fa-file-invoice"></i> Facture ${escapeHtml(f.numero)}`, html + `
+    <div class="form-actions" style="margin-top:1rem">
+      <button type="button" class="btn btn-secondary" data-close>Fermer</button>
+      <button type="button" class="btn btn-primary" id="printBtn"><i class="fas fa-print"></i> Imprimer / PDF</button>
+      ${CURRENT_USER.role === 'superadmin' && f.statut === 'envoyee' ? `
+        <button type="button" class="btn btn-danger" id="refusBtn"><i class="fas fa-times"></i> Refuser</button>
+        <button type="button" class="btn btn-primary" id="validBtn"><i class="fas fa-check"></i> Valider</button>
+      ` : ''}
+      ${CURRENT_USER.role === 'superadmin' && f.statut === 'validee' ? `
+        <button type="button" class="btn btn-primary" id="payBtn"><i class="fas fa-money-bill-wave"></i> Marquer payée</button>
+      ` : ''}
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelector('#printBtn').onclick = () => printInvoice(m.el.querySelector('#factureToPrint'))
+  const vb = m.el.querySelector('#validBtn')
+  if (vb) vb.onclick = async () => {
+    try { await api.post('/factures/' + id + '/valider'); toast('Facture validée'); m.close(); navigate(CURRENT_USER.role === 'superadmin' ? 'admin-factures' : 'a-factures') }
+    catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
+  const rb = m.el.querySelector('#refusBtn')
+  if (rb) rb.onclick = () => {
+    const motif = prompt('Motif du refus :')
+    if (!motif) return
+    api.post('/factures/' + id + '/refuser', { motif })
+      .then(() => { toast('Facture refusée'); m.close(); navigate('admin-factures') })
+      .catch(err => toast(err.response?.data?.error || 'Erreur', 'error'))
+  }
+  const pb = m.el.querySelector('#payBtn')
+  if (pb) pb.onclick = () => {
+    const ref = prompt('Référence de paiement (n° de virement) :')
+    api.post('/factures/' + id + '/payer', { reference_paiement: ref || null })
+      .then(() => { toast('Facture payée'); m.close(); navigate('admin-factures') })
+      .catch(err => toast(err.response?.data?.error || 'Erreur', 'error'))
+  }
+}
+
+// ============================================================
+// === FACTURES AGENT (création + liste) ======================
+// ============================================================
+PAGES['a-factures'] = async (c) => {
+  const { data } = await api.get('/factures?type=agent_to_dropeat')
+  const factures = data.factures || []
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-file-invoice-dollar"></i> Mes factures</h1>
+        <div class="subtitle">${factures.length} facture${factures.length > 1 ? 's' : ''} — vous facturez DropEat vos commissions (propres + portefeuille + N+1 + N+2)</div></div>
+      <button class="btn btn-primary" id="newFacture"><i class="fas fa-plus"></i> Nouvelle facture</button>
+    </div>
+    <div class="card">
+      <div class="card-title"><i class="fas fa-list"></i> Historique de mes factures</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Numéro</th><th>Période</th><th>Émission</th><th>Échéance</th><th class="text-right">Montant HT</th><th class="text-right">TTC</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>${factures.length ? factures.map(f => `<tr>
+          <td><strong style="font-family:monospace">${escapeHtml(f.numero)}</strong></td>
+          <td>${monthsFR[f.periode_mois-1]} ${f.periode_annee}</td>
+          <td>${fmtDate(f.date_emission)}</td>
+          <td>${fmtDate(f.date_echeance)}</td>
+          <td class="text-right">${fmtEUR(f.montant_ht)}</td>
+          <td class="text-right"><strong>${fmtEUR(f.montant_ttc)}</strong></td>
+          <td>${factureStatutBadge(f.statut)}</td>
+          <td class="text-right" style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary" data-view="${f.id}" title="Voir / PDF"><i class="fas fa-eye"></i></button>
+            ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-primary" data-send="${f.id}" title="Envoyer pour validation"><i class="fas fa-paper-plane"></i></button>` : ''}
+            ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-danger" data-del="${f.id}" title="Supprimer"><i class="fas fa-trash"></i></button>` : ''}
+          </td>
+        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucune facture pour le moment. Cliquez sur « Nouvelle facture ».</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `
+  c.querySelector('#newFacture').onclick = () => factureCreateAgentModal(() => navigate('a-factures'))
+  c.querySelectorAll('[data-view]').forEach(b => b.onclick = () => factureViewerModal(b.dataset.view))
+  c.querySelectorAll('[data-send]').forEach(b => b.onclick = () => confirmDialog(
+    'Envoyer cette facture au super-admin pour validation ? Vous ne pourrez plus la modifier.',
+    async () => {
+      try { await api.post('/factures/' + b.dataset.send + '/envoyer'); toast('Facture envoyée'); navigate('a-factures') }
+      catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+    }
+  ))
+  c.querySelectorAll('[data-del]').forEach(b => b.onclick = () => confirmDialog(
+    'Supprimer cette facture brouillon ?',
+    async () => {
+      try { await api.delete('/factures/' + b.dataset.del); toast('Facture supprimée'); navigate('a-factures') }
+      catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+    }
+  ))
+}
+
+function factureCreateAgentModal(onSuccess) {
+  const now = new Date()
+  const annee = now.getFullYear()
+  const moisCur = now.getMonth() + 1
+  const m = modal('<i class="fas fa-file-invoice"></i> Nouvelle facture de commissions', `
+    <p class="text-muted" style="font-size:.85rem;margin-bottom:.6rem">
+      <i class="fas fa-circle-info"></i> Cette facture inclura automatiquement vos commissions propres, portefeuille, N+1 (vos filleuls directs) et N+2 (sous-filleuls) pour la période choisie.
+    </p>
+    <div class="form-grid">
+      <div class="form-group"><label>Année</label><input id="fcAnnee" type="number" value="${annee}" min="2024" max="2030"/></div>
+      <div class="form-group"><label>Mois</label>
+        <select id="fcMois">${monthsFR.map((mo, i) => `<option value="${i+1}" ${i+1===moisCur?'selected':''}>${mo}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div id="fcPreview" style="margin:1rem 0;padding:1rem;background:#f9fafb;border-radius:6px;display:none"></div>
+    <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="fcNotes" rows="2"></textarea></div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+      <button type="button" class="btn btn-info" id="fcPreviewBtn"><i class="fas fa-eye"></i> Aperçu</button>
+      <button type="button" class="btn btn-primary" id="fcCreate"><i class="fas fa-file-invoice"></i> Créer brouillon</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelector('#fcPreviewBtn').onclick = async () => {
+    const a = parseInt(m.el.querySelector('#fcAnnee').value)
+    const mo = parseInt(m.el.querySelector('#fcMois').value)
+    try {
+      const { data } = await api.post('/factures/agent/preview', { annee: a, mois: mo })
+      const box = m.el.querySelector('#fcPreview')
+      box.style.display = 'block'
+      box.innerHTML = data.lignes.length ? `
+        <strong>Aperçu — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
+        <table class="data-table" style="font-size:.8rem;margin-top:.5rem">
+          <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">Montant HT</th></tr></thead>
+          <tbody>${data.lignes.map(l => `<tr>
+            <td>${escapeHtml(l.libelle)}<br><small class="text-muted">${escapeHtml(l.description)}</small></td>
+            <td class="text-right">${fmtNum(l.quantite)}</td>
+            <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
+          </tr>`).join('')}</tbody>
+        </table>
+      ` : '<div class="text-muted">Aucune commission à facturer pour cette période.</div>'
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+  m.el.querySelector('#fcCreate').onclick = async () => {
+    const a = parseInt(m.el.querySelector('#fcAnnee').value)
+    const mo = parseInt(m.el.querySelector('#fcMois').value)
+    const notes = m.el.querySelector('#fcNotes').value
+    try {
+      const { data } = await api.post('/factures/agent/create', { annee: a, mois: mo, notes })
+      toast('Facture créée : ' + data.numero)
+      m.close()
+      onSuccess && onSuccess()
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+}
+
+// ============================================================
+// === ADMIN FACTURES =========================================
+// ============================================================
+PAGES['admin-factures'] = async (c) => {
+  const [ag, dr] = await Promise.all([
+    api.get('/factures?type=agent_to_dropeat'),
+    api.get('/factures?type=dropeat_to_resto')
+  ])
+  const fAg = ag.data.factures || []
+  const fDr = dr.data.factures || []
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-file-invoice-dollar"></i> Factures</h1>
+        <div class="subtitle">Reçues des agents (${fAg.length}) · Émises aux restaurants (${fDr.length})</div></div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-title"><i class="fas fa-inbox"></i> Factures reçues des agents commerciaux (${fAg.length})</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>N°</th><th>Émetteur</th><th>Période</th><th>Émission</th><th class="text-right">HT</th><th class="text-right">TTC</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>${fAg.length ? fAg.map(f => `<tr>
+          <td><strong style="font-family:monospace">${escapeHtml(f.numero)}</strong></td>
+          <td>${escapeHtml(f.emetteur_prenom + ' ' + f.emetteur_nom)}</td>
+          <td>${monthsFR[f.periode_mois-1]} ${f.periode_annee}</td>
+          <td>${fmtDate(f.date_emission)}</td>
+          <td class="text-right">${fmtEUR(f.montant_ht)}</td>
+          <td class="text-right"><strong>${fmtEUR(f.montant_ttc)}</strong></td>
+          <td>${factureStatutBadge(f.statut)}</td>
+          <td class="text-right">
+            <button class="btn btn-sm btn-secondary" data-view="${f.id}"><i class="fas fa-eye"></i> Voir</button>
+          </td>
+        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucune facture reçue</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><i class="fas fa-paper-plane"></i> Factures émises aux restaurants (${fDr.length})</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>N°</th><th>Restaurant</th><th>Période</th><th>Émission</th><th class="text-right">HT</th><th class="text-right">TTC</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>${fDr.length ? fDr.map(f => `<tr>
+          <td><strong style="font-family:monospace">${escapeHtml(f.numero)}</strong></td>
+          <td>${escapeHtml(f.dest_restaurant_nom || '—')}</td>
+          <td>${monthsFR[f.periode_mois-1]} ${f.periode_annee}</td>
+          <td>${fmtDate(f.date_emission)}</td>
+          <td class="text-right">${fmtEUR(f.montant_ht)}</td>
+          <td class="text-right"><strong>${fmtEUR(f.montant_ttc)}</strong></td>
+          <td>${factureStatutBadge(f.statut)}</td>
+          <td class="text-right">
+            <button class="btn btn-sm btn-secondary" data-view="${f.id}"><i class="fas fa-eye"></i> Voir</button>
+          </td>
+        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucune facture émise</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `
+  c.querySelectorAll('[data-view]').forEach(b => b.onclick = () => factureViewerModal(b.dataset.view))
+}
+
+// === Generate invoice DropEat → Restaurant ===
+PAGES['admin-factures-resto'] = async (c) => {
+  const { data } = await api.get('/admin/restaurants').catch(() => ({ data: { restaurants: [] } }))
+  const restos = data.restaurants || []
+  const now = new Date()
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-file-export"></i> Facturer un restaurant</h1>
+        <div class="subtitle">Génération automatique de la facture DropEat → Restaurant selon ses marques actives</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><i class="fas fa-list"></i> Sélectionner restaurant + période</div>
+      <div class="form-grid">
+        <div class="form-group" style="grid-column:1/-1"><label>Restaurant <span class="req">*</span></label>
+          <select id="frResto">
+            <option value="">— Choisir —</option>
+            ${restos.map(r => `<option value="${r.id}">${escapeHtml(r.nom)} — ${escapeHtml(r.ville || '')}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>Année</label><input id="frAnnee" type="number" value="${now.getFullYear()}" min="2024" max="2030"/></div>
+        <div class="form-group"><label>Mois</label>
+          <select id="frMois">${monthsFR.map((mo, i) => `<option value="${i+1}" ${i+1===now.getMonth()+1?'selected':''}>${mo}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" id="frCreate"><i class="fas fa-file-invoice"></i> Générer la facture</button>
+      </div>
+    </div>
+  `
+  c.querySelector('#frCreate').onclick = async () => {
+    const restaurant_id = parseInt(c.querySelector('#frResto').value)
+    const annee = parseInt(c.querySelector('#frAnnee').value)
+    const mois = parseInt(c.querySelector('#frMois').value)
+    if (!restaurant_id) return toast('Sélectionnez un restaurant', 'error')
+    try {
+      const { data } = await api.post('/factures/resto/create', { restaurant_id, annee, mois })
+      toast('Facture générée : ' + data.numero)
+      factureViewerModal(data.facture_id)
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+}
+
+// ============================================================
+// === ADMIN CRUD AGENTS (omnipotence) ========================
+// ============================================================
+PAGES['admin-agents-crud'] = async (c) => {
+  const { data } = await api.get('/admin/agents-crud')
+  const agents = data.agents || []
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-user-shield"></i> Gestion des agents (Omnipotence)</h1>
+        <div class="subtitle">${agents.length} agent${agents.length > 1 ? 's' : ''} — créer, modifier, assigner, désactiver, supprimer</div></div>
+      <button class="btn btn-primary" id="newAgent"><i class="fas fa-user-plus"></i> Créer un agent</button>
+    </div>
+    <div class="card">
+      <div class="card-title"><i class="fas fa-list"></i> Tous les agents</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Nom</th><th>Email</th><th>Niveau</th><th>Parent</th><th class="text-right">Filleuls</th><th class="text-right">Restos</th><th>Statut</th><th>Dernière connexion</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>${agents.length ? agents.map(a => `<tr>
+          <td><strong>${escapeHtml(a.prenom + ' ' + a.nom)}</strong></td>
+          <td style="font-size:.85rem">${escapeHtml(a.email)}</td>
+          <td>${niveauPill(a.niveau)}</td>
+          <td>${a.parent_nom ? escapeHtml(a.parent_nom) : '<span class="text-muted">—</span>'}</td>
+          <td class="text-right">${a.nb_enfants_directs}</td>
+          <td class="text-right">${a.nb_restos}</td>
+          <td>${a.actif ? '<span class="badge badge-primary">Actif</span>' : '<span class="badge badge-danger">Inactif</span>'}</td>
+          <td style="font-size:.85rem">${fmtDateTime(a.derniere_connexion)}</td>
+          <td class="text-right" style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary" data-edit="${a.id}" title="Modifier"><i class="fas fa-edit"></i></button>
+            <button class="btn btn-sm ${a.actif ? 'btn-warning' : 'btn-primary'}" data-toggle="${a.id}" data-actif="${a.actif}" title="${a.actif ? 'Désactiver' : 'Activer'}"><i class="fas fa-${a.actif ? 'pause' : 'play'}"></i></button>
+            <button class="btn btn-sm btn-info" data-pwd="${a.id}" title="Reset mot de passe"><i class="fas fa-key"></i></button>
+            <button class="btn btn-sm btn-danger" data-del="${a.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+          </td>
+        </tr>`).join('') : '<tr><td colspan="9" class="text-center text-muted">Aucun agent</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `
+  c.querySelector('#newAgent').onclick = () => adminAgentFormModal(null, () => navigate('admin-agents-crud'))
+  c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
+    const a = agents.find(x => x.id == b.dataset.edit)
+    adminAgentFormModal(a, () => navigate('admin-agents-crud'))
+  })
+  c.querySelectorAll('[data-toggle]').forEach(b => b.onclick = () => {
+    const id = b.dataset.toggle, actif = b.dataset.actif === '1'
+    const url = actif ? '/admin/agents-crud/' + id + '/desactiver' : '/admin/agents-crud/' + id + '/activer'
+    confirmDialog(actif ? 'Désactiver cet agent ? Toutes ses sessions seront fermées.' : 'Activer cet agent ?',
+      async () => { await api.put(url); toast('OK'); navigate('admin-agents-crud') })
+  })
+  c.querySelectorAll('[data-pwd]').forEach(b => b.onclick = () => {
+    const id = b.dataset.pwd
+    const pwd = prompt('Nouveau mot de passe (≥6 caractères) :')
+    if (!pwd) return
+    api.put('/admin/omnipotence/user/' + id + '/password', { new_password: pwd })
+      .then(() => toast('Mot de passe modifié'))
+      .catch(e => toast(e.response?.data?.error || 'Erreur', 'error'))
+  })
+  c.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    confirmDialog('Supprimer définitivement cet agent ? (Refusé s\'il a des filleuls ou restaurants associés)',
+      async () => {
+        try { await api.delete('/admin/agents-crud/' + b.dataset.del); toast('Agent supprimé'); navigate('admin-agents-crud') }
+        catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+      })
+  })
+}
+
+async function adminAgentFormModal(agent, onSuccess) {
+  const isEdit = !!agent
+  const a = agent || { niveau: 1 }
+  const niveau = a.niveau ?? 1
+  const { data: pp } = await api.get('/admin/agents-crud/parents-possibles?level=' + niveau).catch(() => ({ data: { parents: [] } }))
+
+  const m = modal(`<i class="fas fa-${isEdit ? 'edit' : 'user-plus'}"></i> ${isEdit ? 'Modifier' : 'Créer'} un agent`, `
+    <form id="aaForm">
+      <div class="form-grid">
+        <div class="form-group"><label>Prénom <span class="req">*</span></label><input id="aaPrenom" value="${escapeHtml(a.prenom || '')}" required /></div>
+        <div class="form-group"><label>Nom <span class="req">*</span></label><input id="aaNom" value="${escapeHtml(a.nom || '')}" required /></div>
+        <div class="form-group" style="grid-column:1/-1"><label>Email <span class="req">*</span></label><input id="aaEmail" type="email" value="${escapeHtml(a.email || '')}" required /></div>
+        <div class="form-group"><label>Téléphone</label><input id="aaTel" value="${escapeHtml(a.telephone || '')}" /></div>
+        <div class="form-group"><label>IBAN</label><input id="aaIban" value="${escapeHtml(a.iban || '')}" /></div>
+        <div class="form-group"><label>Niveau MLM <span class="req">*</span></label>
+          <select id="aaNiveau">
+            ${[0,1,2,3,4,5].map(n => `<option value="${n}" ${n===niveau?'selected':''}>N${n}${n===0?' (Commercial racine)':''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>Parent (selon niveau)</label>
+          <select id="aaParent">
+            <option value="">— ${niveau === 0 ? 'Pas de parent' : 'Choisir parent'} —</option>
+            ${pp.parents.map(p => `<option value="${p.id}" ${a.parent_id == p.id ? 'selected' : ''}>${escapeHtml(p.prenom + ' ' + p.nom)} (N${p.niveau})</option>`).join('')}
+          </select>
+        </div>
+        ${!isEdit ? `<div class="form-group" style="grid-column:1/-1"><label>Mot de passe (optionnel — auto-généré si vide)</label><input id="aaPwd" type="text" placeholder="laisser vide pour générer" /></div>` : ''}
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> ${isEdit ? 'Enregistrer' : 'Créer'}</button>
+      </div>
+    </form>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelector('#aaNiveau').onchange = async () => {
+    const lvl = parseInt(m.el.querySelector('#aaNiveau').value)
+    const { data: nn } = await api.get('/admin/agents-crud/parents-possibles?level=' + lvl).catch(() => ({ data: { parents: [] } }))
+    m.el.querySelector('#aaParent').innerHTML = `<option value="">— ${lvl === 0 ? 'Pas de parent' : 'Choisir parent'} —</option>` +
+      nn.parents.map(p => `<option value="${p.id}">${escapeHtml(p.prenom + ' ' + p.nom)} (N${p.niveau})</option>`).join('')
+  }
+  m.el.querySelector('#aaForm').onsubmit = async e => {
+    e.preventDefault()
+    const body = {
+      email: m.el.querySelector('#aaEmail').value.trim(),
+      nom: m.el.querySelector('#aaNom').value.trim(),
+      prenom: m.el.querySelector('#aaPrenom').value.trim(),
+      telephone: m.el.querySelector('#aaTel').value.trim() || null,
+      iban: m.el.querySelector('#aaIban').value.trim() || null,
+      niveau: parseInt(m.el.querySelector('#aaNiveau').value),
+      parent_id: m.el.querySelector('#aaParent').value ? parseInt(m.el.querySelector('#aaParent').value) : null
+    }
+    try {
+      if (isEdit) {
+        await api.put('/admin/agents-crud/' + agent.id, body)
+        toast('Agent modifié')
+      } else {
+        body.password = m.el.querySelector('#aaPwd')?.value.trim() || null
+        const r = await api.post('/admin/agents-crud/create', body)
+        m.close()
+        showAccessCodeModal(r.data.code_acces, () => onSuccess && onSuccess())
+        return
+      }
+      m.close()
+      onSuccess && onSuccess()
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
 }
 
 // ===== Bootstrap =====

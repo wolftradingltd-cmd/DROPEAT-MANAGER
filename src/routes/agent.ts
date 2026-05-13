@@ -447,6 +447,171 @@ app.get('/sous-agents', async (c) => {
 })
 
 // ============================================================
+// MLM TREE 2 NIVEAUX — pour dashboard agent
+// GET /api/agent/mlm-tree
+// → { me, filleuls: [{ ..., sous_filleuls: [...] }], total_n1, total_n2 }
+// ============================================================
+app.get('/mlm-tree', async (c) => {
+  const me = c.get('user')
+  const annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+  const mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+  const debut = `${annee}-${String(mois).padStart(2, '0')}-01`
+  const finJ = new Date(annee, mois, 0).getDate()
+  const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(finJ).padStart(2, '0')}T23:59:59`
+
+  // N+1 directs (filleuls de l'agent)
+  const { results: n1 } = await c.env.DB.prepare(`
+    SELECT u.id, u.email, u.nom, u.prenom, u.niveau, u.actif, u.derniere_connexion, u.created_at,
+      (SELECT COUNT(*) FROM users WHERE parent_id = u.id) as nb_filleuls,
+      (SELECT COUNT(*) FROM restaurants WHERE agent_id = u.id) as nb_restos,
+      (SELECT COALESCE(SUM(c.commission_agent_montant),0) + COALESCE(SUM(c.commission_portefeuille_montant),0)
+        FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        JOIN restaurants r ON m.restaurant_id = r.id
+        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+      ) as ca_periode,
+      (SELECT COALESCE(SUM(c.montant_brut),0)
+        FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        JOIN restaurants r ON m.restaurant_id = r.id
+        WHERE r.agent_id = u.id AND c.statut != 'annulee'
+      ) as ca_total
+    FROM users u WHERE u.parent_id = ? AND u.role = 'agent'
+    ORDER BY u.nom, u.prenom
+  `).bind(debut, fin, me.id).all() as any
+
+  // N+2 par parent direct
+  const n1Ids = (n1 as any[]).map((x: any) => x.id)
+  const n2ByParent: Record<number, any[]> = {}
+  if (n1Ids.length) {
+    const ph = n1Ids.map(() => '?').join(',')
+    const { results: n2 } = await c.env.DB.prepare(`
+      SELECT u.id, u.email, u.nom, u.prenom, u.niveau, u.parent_id, u.actif,
+        (SELECT COUNT(*) FROM restaurants WHERE agent_id = u.id) as nb_restos,
+        (SELECT COALESCE(SUM(c.commission_agent_montant),0)
+          FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+          JOIN restaurants r ON m.restaurant_id = r.id
+          WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+        ) as ca_periode
+      FROM users u WHERE u.parent_id IN (${ph}) AND u.role = 'agent'
+      ORDER BY u.nom, u.prenom
+    `).bind(debut, fin, ...n1Ids).all() as any
+    for (const x of n2 as any[]) {
+      if (!n2ByParent[x.parent_id]) n2ByParent[x.parent_id] = []
+      n2ByParent[x.parent_id].push(x)
+    }
+  }
+
+  const filleuls = (n1 as any[]).map((x: any) => ({
+    ...x,
+    sous_filleuls: n2ByParent[x.id] || []
+  }))
+
+  const total_n1 = filleuls.length
+  const total_n2 = filleuls.reduce((s: number, x: any) => s + (x.sous_filleuls?.length || 0), 0)
+
+  return c.json({
+    me: { id: me.id, nom: me.nom, prenom: me.prenom, niveau: me.niveau },
+    filleuls,
+    total_n1, total_n2,
+    periode: { annee, mois }
+  })
+})
+
+// ============================================================
+// HISTORIQUE COMMISSIONS — vue mensuelle ou hebdomadaire (12 dernières)
+// GET /api/agent/commissions/history?type=monthly|weekly
+// ============================================================
+app.get('/commissions/history', async (c) => {
+  const me = c.get('user')
+  const type = c.req.query('type') || 'monthly'
+  const branchIds = await getBranchAgentIds(c.env.DB, me.id)
+  const inClause = `(${branchIds.map(() => '?').join(',')})`
+
+  const baseSelect = `
+      COUNT(c.id) as nb_commandes,
+      COALESCE(SUM(CASE WHEN r.agent_id = ? THEN c.commission_agent_montant ELSE 0 END), 0) as comm_propre,
+      COALESCE(SUM(CASE WHEN r.agent_id = ? THEN c.commission_portefeuille_montant ELSE 0 END), 0) as comm_portefeuille,
+      COALESCE(SUM(CASE
+        WHEN (SELECT parent_id FROM users WHERE id = r.agent_id) = ? THEN c.commission_n1_montant
+        ELSE 0 END), 0) as comm_n1,
+      COALESCE(SUM(CASE
+        WHEN (SELECT parent_id FROM users WHERE id = (SELECT parent_id FROM users WHERE id = r.agent_id)) = ? THEN c.commission_n2_montant
+        ELSE 0 END), 0) as comm_n2`
+
+  if (type === 'weekly') {
+    const { results } = await c.env.DB.prepare(`
+      SELECT strftime('%Y-W%W', c.date_commande) as periode, ${baseSelect}
+      FROM commandes c
+      JOIN marques_virtuelles m ON c.marque_id = m.id
+      JOIN restaurants r ON m.restaurant_id = r.id
+      WHERE r.agent_id IN ${inClause}
+        AND c.date_commande >= date('now', '-90 day')
+        AND c.statut != 'annulee'
+      GROUP BY periode
+      ORDER BY periode DESC LIMIT 12
+    `).bind(me.id, me.id, me.id, me.id, ...branchIds).all() as any
+    const enriched = (results as any[]).map(r => ({ ...r, total: r.comm_propre + r.comm_portefeuille + r.comm_n1 + r.comm_n2 }))
+    return c.json({ type: 'weekly', history: enriched.reverse() })
+  }
+
+  // monthly — 12 derniers mois
+  const { results } = await c.env.DB.prepare(`
+    SELECT strftime('%Y-%m', c.date_commande) as periode, ${baseSelect}
+    FROM commandes c
+    JOIN marques_virtuelles m ON c.marque_id = m.id
+    JOIN restaurants r ON m.restaurant_id = r.id
+    WHERE r.agent_id IN ${inClause}
+      AND c.date_commande >= date('now', '-12 month')
+      AND c.statut != 'annulee'
+    GROUP BY periode
+    ORDER BY periode DESC LIMIT 12
+  `).bind(me.id, me.id, me.id, me.id, ...branchIds).all() as any
+  const enriched = (results as any[]).map(r => ({ ...r, total: r.comm_propre + r.comm_portefeuille + r.comm_n1 + r.comm_n2 }))
+  return c.json({ type: 'monthly', history: enriched.reverse() })
+})
+
+// ============================================================
+// COMMISSIONS DES SOUS-AGENTS — vue agrégée (pour visu commerciale)
+// GET /api/agent/sous-agents/commissions?annee=&mois=
+// ============================================================
+app.get('/sous-agents/commissions', async (c) => {
+  const me = c.get('user')
+  const annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+  const mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+  const debut = `${annee}-${String(mois).padStart(2, '0')}-01`
+  const finJ = new Date(annee, mois, 0).getDate()
+  const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(finJ).padStart(2, '0')}T23:59:59`
+
+  const branchIds = await getBranchAgentIds(c.env.DB, me.id)
+  const otherIds = branchIds.filter(i => i !== me.id)
+  if (!otherIds.length) return c.json({ sous_agents: [] })
+  const ph = otherIds.map(() => '?').join(',')
+  const { results } = await c.env.DB.prepare(`
+    SELECT u.id, u.nom, u.prenom, u.niveau, u.parent_id,
+      p.nom as parent_nom, p.prenom as parent_prenom,
+      (SELECT COUNT(*) FROM restaurants WHERE agent_id = u.id) as nb_restos,
+      (SELECT COUNT(c.id) FROM commandes c
+        JOIN marques_virtuelles m ON c.marque_id = m.id
+        JOIN restaurants r ON m.restaurant_id = r.id
+        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+      ) as nb_commandes,
+      (SELECT COALESCE(SUM(c.commission_agent_montant),0) + COALESCE(SUM(c.commission_portefeuille_montant),0)
+        FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        JOIN restaurants r ON m.restaurant_id = r.id
+        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+      ) as commissions_propres,
+      (SELECT COALESCE(SUM(c.montant_brut),0)
+        FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
+        JOIN restaurants r ON m.restaurant_id = r.id
+        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+      ) as ca_periode
+    FROM users u LEFT JOIN users p ON u.parent_id = p.id
+    WHERE u.id IN (${ph}) AND u.role = 'agent'
+    ORDER BY u.niveau, commissions_propres DESC
+  `).bind(debut, fin, debut, fin, debut, fin, ...otherIds).all() as any
+  return c.json({ sous_agents: results, periode: { annee, mois } })
+})
+
+// ============================================================
 // PALIERS (lecture seule pour agents)
 // ============================================================
 app.get('/paliers', async (c) => {

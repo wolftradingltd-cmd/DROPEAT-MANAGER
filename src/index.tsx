@@ -24,6 +24,9 @@ import agentSousAgents from './routes/agent-sous-agents'
 import register from './routes/register'
 import mlm from './routes/mlm'
 import agent from './routes/agent'
+import societes from './routes/societes'
+import factures from './routes/factures'
+import adminAgentsCrud from './routes/admin-agents-crud'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -49,7 +52,14 @@ app.route('/api/admin/attribution', adminAttribution)
 app.route('/api/admin/dashboard-v2', adminDashboardV2)
 app.route('/api/admin/tracabilite', adminTracabilite)
 app.route('/api/admin/comptes', adminComptes)
+app.route('/api/admin/agents-crud', adminAgentsCrud)
 app.route('/api/shortener', adminShortener)
+
+// Profils société (tout user authentifié)
+app.route('/api/societes', societes)
+
+// Factures (agent → DropEat + DropEat → restaurant)
+app.route('/api/factures', factures)
 
 // Agent : création de filleul + comptes
 app.route('/api/agent/sous-agents', agentSousAgents)
