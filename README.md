@@ -12,6 +12,59 @@ Application web complète pour gérer le suivi des commissions de votre activit�
 
 ---
 
+## 🆕 Nouveautés (session courante)
+
+### 🌳 Dashboard agent — Arbre MLM 2 niveaux (N+1 + N+2)
+- Visualisation de l'arbre MLM avec **noms des filleuls** (N+1) et **sous-filleuls** (N+2)
+- Compteurs par nœud : nb filleuls, CA période, etc.
+- Résout l'absence de visibilité du réseau (ex. Sébastien Garcia)
+- Mini-graphique historique des commissions sur le dashboard
+
+### 📊 Historique des commissions
+- Page dédiée `a-historique-comm` avec toggle **Mensuel / Hebdomadaire**
+- Stacked bar chart : commissions propres / portefeuille / override N+1 / override N+2
+- Tableau détail des 12 dernières périodes
+
+### 👨‍👦 Commissions sous-agents (visualisation commerciale)
+- Page `a-sous-agents-comm` groupée par niveau (N+1 et N+2)
+- Voir les commissions générées par chaque filleul direct et indirect
+
+### 🏢 Profil société + Facturation automatique
+- **Profil société** par utilisateur (FR auto-entrepreneur ou UK Ltd)
+- Superadmin : profil **DROPEAT LTD** (UK) pré-rempli
+- **Agent → DropEat** : preview + création + workflow (envoyer/valider/refuser/payer)
+- **DropEat → Restaurant** : génération automatique par superadmin (période + restaurant)
+- Snapshots émetteur/destinataire JSON, numérotation atomique
+- Mentions légales **2026 conformes** : FR (art. 293B CGI, L441-10, Décret 2012-1115) + UK (Late Payment Act 1998)
+- Lignes facture incluent **commissions propres + portefeuille + overrides N+1 et N+2**
+- Modal facture **imprimable en PDF** (window.print) avec CSS @media print
+
+### 🔧 Superadmin omnipotent CRUD agents
+- Page `admin-agents-crud` : create/update/activer/désactiver/supprimer
+- Parent dropdown **dynamique selon niveau** (anti-cycle)
+- Refuse suppression si filleuls ou restaurants attachés (réassignation possible)
+- Génération automatique mot de passe + code d'accès
+
+### 🧹 Nettoyage
+- Suppression du **champ code invitation** du modal "Créer un filleul"
+- **IA Prospection** mise en stand-by (pages + bloc dashboard admin retirés)
+
+### 📡 Nouveaux endpoints API
+- `GET /api/agent/mlm-tree?annee=&mois=` — arbre MLM 2 niveaux
+- `GET /api/agent/commissions/history?type=monthly|weekly` — historique
+- `GET /api/agent/sous-agents/commissions` — commissions agrégées par filleul
+- `/api/societes/me`, `/api/societes/user/:id`, `/api/societes/user/:id/valider`, `/api/societes/all`
+- `/api/factures` (CRUD + workflow), `/api/factures/agent/preview`, `/api/factures/agent/create`, `/api/factures/resto/create`, `/api/factures/:id/envoyer|valider|refuser|payer`
+- `/api/admin/agents-crud/*` (CRUD complet + `parents-possibles?level=` + `reassign-restos`)
+
+### 🗄️ Nouvelles tables (migration 0008)
+- `profils_societe` — informations société par utilisateur (FR/UK)
+- `factures` — entête facture + snapshots + statut workflow (brouillon → envoyée → validée/refusée → payée)
+- `facture_lignes` — détail (catégorie : comm_propre / comm_portefeuille / comm_n1 / comm_n2 / facturation_resto)
+- `facture_compteurs` — numérotation atomique par préfixe
+
+---
+
 ## ✅ Fonctionnalités implémentées
 
 ### 👥 Gestion des agents (MLM 3 niveaux)
