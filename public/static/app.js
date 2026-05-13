@@ -41,8 +41,9 @@ function toast(msg, type = 'success', duration = 3500) {
 function modal(title, html, opts = {}) {
   const w = document.createElement('div')
   w.className = 'modal-overlay'
+  const sizeClass = opts.size === 'lg' ? ' modal-lg' : opts.size === 'xl' ? ' modal-xl' : ''
   w.innerHTML = `
-    <div class="modal">
+    <div class="modal${sizeClass}">
       <div class="modal-header"><h3>${escapeHtml(title)}</h3><button class="modal-close">&times;</button></div>
       <div class="modal-body">${html}</div>
       ${opts.footer ? `<div class="modal-footer">${opts.footer}</div>` : ''}
@@ -4097,48 +4098,387 @@ function showAccessCodeModal(codeAcces, onClose) {
   }
 }
 
-// --- Mes restaurants ---
+// --- Mes Restaurants (CRM / MLM senior view) ---
+// Arborescence Restaurant → Marques → Sous-agents → Statuts + checklist + docs + KPI
 PAGES['a-restaurants'] = async (c) => {
-  const [r, sa] = await Promise.all([api.get('/agent/restaurants'), api.get('/agent/sous-agents').catch(() => ({ data: { sous_agents: [] } }))])
-  const allBranchAgents = [{ id: CURRENT_USER.id, prenom: CURRENT_USER.prenom, nom: CURRENT_USER.nom, niveau: CURRENT_USER.niveau }, ...sa.data.sous_agents]
+  // State : période + filtre
+  const now = new Date()
+  const stState = {
+    annee: now.getFullYear(),
+    mois: now.getMonth() + 1,
+    date_debut: '',
+    date_fin: '',
+    mode: 'mois', // mois | custom
+    filtre: 'tous', // tous | portefeuille | en_attente | docs_manquants | refusees
+    search: ''
+  }
+
   c.innerHTML = `
     <div class="page-header">
-      <div><h1>Mes restaurants</h1><div class="subtitle">${r.data.restaurants.length} restaurants dans ma branche</div></div>
-      <button class="btn btn-primary" id="btnNew"><i class="fas fa-plus"></i> Ajouter un restaurant</button>
+      <div>
+        <h1><i class="fas fa-folder-tree"></i> Mes Restaurants</h1>
+        <div class="subtitle">Gestion de portefeuille — vue arborescente CRM / MLM</div>
+      </div>
+      <button class="btn btn-primary" id="btnNewResto"><i class="fas fa-plus"></i> Nouveau restaurant</button>
     </div>
-    <div class="table-wrap"><table class="data-table">
-      <thead><tr><th>Nom</th><th>Ville</th><th>Apporté par</th><th>Rang</th><th class="text-right">Marques</th><th class="text-right">Cmds</th><th class="text-right">CA</th><th class="text-right">Actions</th></tr></thead>
-      <tbody>${r.data.restaurants.length ? r.data.restaurants.map(x => `
-        <tr>
-          <td><strong>${escapeHtml(x.nom)}</strong>
-            ${x.is_portefeuille_proprietaire ? '<span class="badge badge-gold">PORTEFEUILLE</span>' : ''}
-            ${x.tablette_sr_shop ? '<span class="badge badge-info"><i class="fas fa-tablet-screen-button"></i></span>' : ''}
-          </td>
-          <td>${escapeHtml(x.ville || '-')}</td>
-          <td>${x.agent_id === CURRENT_USER.id ? '<strong>Moi</strong>' : escapeHtml((x.agent_prenom || '') + ' ' + (x.agent_nom || ''))}</td>
-          <td>#${x.rang_apport || '-'}</td>
-          <td class="text-right">${x.nb_marques}</td>
-          <td class="text-right">${fmtNum(x.nb_commandes)}</td>
-          <td class="text-right"><strong>${fmtEUR(x.ca_total)}</strong></td>
-          <td class="text-right">
-            <button class="btn btn-sm btn-secondary" data-detail="${x.id}"><i class="fas fa-eye"></i></button>
-            <button class="btn btn-sm btn-secondary" data-edit="${x.id}"><i class="fas fa-pen"></i></button>
-            <button class="btn btn-sm btn-danger" data-del="${x.id}"><i class="fas fa-trash"></i></button>
-          </td>
-        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucun restaurant. Cliquez sur « Ajouter un restaurant » pour commencer.</td></tr>'}</tbody>
-    </table></div>`
-  document.getElementById('btnNew').onclick = () => agentRestaurantModal(null, allBranchAgents)
-  c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => agentRestaurantModal(r.data.restaurants.find(x => x.id == b.dataset.edit), allBranchAgents))
-  c.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => agentRestaurantDetail(parseInt(b.dataset.detail)))
-  c.querySelectorAll('[data-del]').forEach(b => b.onclick = () => confirmDialog('Supprimer ce restaurant et toutes ses données ?',
-    async () => { await api.delete('/agent/restaurants/' + b.dataset.del); toast('Supprimé'); navigate('a-restaurants') }))
+
+    <div class="card mb-3">
+      <div class="card-title"><i class="fas fa-calendar"></i> Période & filtres</div>
+      <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end">
+        <div class="form-group">
+          <label>Mode période</label>
+          <select id="fMode">
+            <option value="mois">Mois</option>
+            <option value="custom">Plage personnalisée</option>
+          </select>
+        </div>
+        <div class="form-group" id="grpMois">
+          <label>Année / Mois</label>
+          <div style="display:flex;gap:4px">
+            <input id="fAnnee" type="number" value="${stState.annee}" min="2024" max="2030" style="width:80px"/>
+            <select id="fMoisSel">${monthsFR.map((m,i)=>`<option value="${i+1}" ${i+1===stState.mois?'selected':''}>${m}</option>`).join('')}</select>
+          </div>
+        </div>
+        <div class="form-group" id="grpDebut" style="display:none"><label>Du</label><input id="fDebut" type="date"/></div>
+        <div class="form-group" id="grpFin" style="display:none"><label>Au</label><input id="fFin" type="date"/></div>
+        <div class="form-group">
+          <label>Filtre</label>
+          <select id="fFiltre">
+            <option value="tous">Tous</option>
+            <option value="portefeuille">100% Portefeuille</option>
+            <option value="en_attente">Marque en attente</option>
+            <option value="refusees">Marque refusée</option>
+            <option value="docs_manquants">Docs manquants</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Recherche</label>
+          <input id="fSearch" placeholder="Nom resto ou marque..." />
+        </div>
+        <div class="form-group">
+          <button class="btn btn-primary" id="btnReload"><i class="fas fa-rotate"></i> Actualiser</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="kpiBar"></div>
+    <div id="treeWrap" class="mb-3"><div class="text-center text-muted" style="padding:2rem"><i class="fas fa-spinner fa-spin"></i> Chargement de votre portefeuille…</div></div>
+  `
+
+  const grpMois = c.querySelector('#grpMois')
+  const grpDebut = c.querySelector('#grpDebut')
+  const grpFin = c.querySelector('#grpFin')
+  c.querySelector('#fMode').onchange = e => {
+    stState.mode = e.target.value
+    if (stState.mode === 'mois') {
+      grpMois.style.display = ''
+      grpDebut.style.display = 'none'
+      grpFin.style.display = 'none'
+    } else {
+      grpMois.style.display = 'none'
+      grpDebut.style.display = ''
+      grpFin.style.display = ''
+    }
+  }
+
+  // Sous-agents pour modal création (qui peut apporter)
+  const sa = await api.get('/agent/sous-agents').catch(() => ({ data: { sous_agents: [] } }))
+  const allBranchAgents = [{ id: CURRENT_USER.id, prenom: CURRENT_USER.prenom, nom: CURRENT_USER.nom, niveau: CURRENT_USER.niveau }, ...sa.data.sous_agents]
+
+  document.getElementById('btnNewResto').onclick = () => agentRestaurantModal(null, allBranchAgents, () => loadTree())
+
+  async function loadTree() {
+    // Construit la query string période
+    const qp = new URLSearchParams()
+    if (stState.mode === 'mois') {
+      qp.set('annee', stState.annee)
+      qp.set('mois', stState.mois)
+    } else if (stState.date_debut && stState.date_fin) {
+      qp.set('date_debut', stState.date_debut)
+      qp.set('date_fin', stState.date_fin)
+    } else {
+      qp.set('annee', stState.annee)
+      qp.set('mois', stState.mois)
+    }
+
+    const wrap = c.querySelector('#treeWrap')
+    wrap.innerHTML = `<div class="text-center text-muted" style="padding:2rem"><i class="fas fa-spinner fa-spin"></i> Chargement…</div>`
+    let data
+    try {
+      const r = await api.get('/agent/mes-restaurants/tree?' + qp.toString())
+      data = r.data
+    } catch (err) {
+      wrap.innerHTML = `<div class="card"><div class="text-center text-danger" style="padding:2rem"><i class="fas fa-triangle-exclamation"></i> ${escapeHtml(err.response?.data?.error || 'Erreur de chargement')}</div></div>`
+      return
+    }
+
+    // KPI bar
+    const s = data.stats || {}
+    c.querySelector('#kpiBar').innerHTML = `
+      <div class="stats-grid mb-3">
+        <div class="stat-card primary"><div class="stat-label">Restaurants</div><div class="stat-value">${fmtNum(s.nb_restos)}</div><div class="stat-extra">${fmtNum(s.nb_marques)} marques</div></div>
+        <div class="stat-card gold"><div class="stat-label">100% Portefeuille</div><div class="stat-value">${fmtNum(s.nb_portefeuille)}</div><div class="stat-extra">marques signées</div></div>
+        <div class="stat-card accent"><div class="stat-label">CA période</div><div class="stat-value">${fmtEUR(s.ca_total_periode)}</div><div class="stat-extra">CA all-time ${fmtEUR(s.ca_total_global)}</div></div>
+        <div class="stat-card info"><div class="stat-label">Commissions période</div><div class="stat-value">${fmtEUR(s.commissions_periode)}</div></div>
+        <div class="stat-card ${s.nb_docs_manquants_total > 0 ? 'danger' : ''}"><div class="stat-label">Docs manquants</div><div class="stat-value">${fmtNum(s.nb_docs_manquants_total)}</div><div class="stat-extra">à compléter</div></div>
+      </div>`
+
+    // Filtrer + trier l'arbre
+    let tree = (data.tree || [])
+    const filtre = stState.filtre
+    const search = (stState.search || '').toLowerCase()
+    if (search) {
+      tree = tree.filter(r => (r.nom||'').toLowerCase().includes(search)
+        || (r.marques||[]).some(m => (m.nom||'').toLowerCase().includes(search)))
+    }
+    if (filtre === 'portefeuille') tree = tree.filter(r => (r.marques||[]).some(m => m.is_portefeuille_proprietaire))
+    if (filtre === 'en_attente') tree = tree.filter(r => (r.alertes?.nb_marques_en_attente || 0) > 0)
+    if (filtre === 'refusees') tree = tree.filter(r => (r.alertes?.nb_marques_refusees || 0) > 0)
+    if (filtre === 'docs_manquants') tree = tree.filter(r => (r.alertes?.nb_docs_manquants || 0) > 0)
+
+    if (!tree.length) {
+      wrap.innerHTML = `<div class="card"><div class="text-center text-muted" style="padding:2rem">
+        <i class="fas fa-folder-open" style="font-size:2rem;opacity:.4"></i>
+        <p>Aucun restaurant ne correspond à ces critères.</p>
+        <button class="btn btn-primary" id="btnNewEmpty"><i class="fas fa-plus"></i> Ajouter un restaurant</button>
+      </div></div>`
+      const b = wrap.querySelector('#btnNewEmpty')
+      if (b) b.onclick = () => agentRestaurantModal(null, allBranchAgents, () => loadTree())
+      return
+    }
+
+    wrap.innerHTML = tree.map(r => renderRestoCard(r)).join('')
+
+    // Wire toggles
+    wrap.querySelectorAll('[data-toggle-resto]').forEach(btn => btn.onclick = () => {
+      const id = btn.dataset.toggleResto
+      const body = wrap.querySelector(`[data-resto-body="${id}"]`)
+      if (!body) return
+      const open = body.style.display !== 'none'
+      body.style.display = open ? 'none' : ''
+      btn.querySelector('i.toggle-icon')?.classList.toggle('fa-chevron-right', open)
+      btn.querySelector('i.toggle-icon')?.classList.toggle('fa-chevron-down', !open)
+    })
+
+    // Wire actions resto
+    wrap.querySelectorAll('[data-resto-edit]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation()
+      const r = tree.find(x => x.id == b.dataset.restoEdit)
+      agentRestaurantModal(r, allBranchAgents, () => loadTree())
+    })
+    wrap.querySelectorAll('[data-resto-del]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation()
+      confirmDialog('Supprimer ce restaurant et toutes ses données ?', async () => {
+        await api.delete('/agent/restaurants/' + b.dataset.restoDel)
+        toast('Supprimé'); loadTree()
+      })
+    })
+    wrap.querySelectorAll('[data-add-marque]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation()
+      agentMarqueModal(parseInt(b.dataset.addMarque), null, null, () => loadTree())
+    })
+    wrap.querySelectorAll('[data-edit-marque]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation()
+      const restoId = parseInt(b.dataset.restoId)
+      const r = tree.find(x => x.id === restoId)
+      const mq = r?.marques?.find(m => m.id == b.dataset.editMarque)
+      if (mq) agentMarqueModal(restoId, mq, null, () => loadTree())
+    })
+    wrap.querySelectorAll('[data-del-marque]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation()
+      confirmDialog('Supprimer cette marque ?', async () => {
+        await api.delete('/agent/marques/' + b.dataset.delMarque); toast('Supprimé'); loadTree()
+      })
+    })
+    wrap.querySelectorAll('[data-facturer]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation()
+      const restoId = parseInt(b.dataset.facturer)
+      const r = tree.find(x => x.id === restoId)
+      if (r) agentFactureCibleeModal(r)
+    })
+    // Boutons upload doc + visualisation
+    wrap.querySelectorAll('[data-upload-doc]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation()
+      agentUploadDocModal(parseInt(b.dataset.upload), b.dataset.docType, b.dataset.docLabel, () => loadTree())
+    })
+  }
+
+  // Hooks
+  c.querySelector('#btnReload').onclick = () => {
+    stState.annee = parseInt(c.querySelector('#fAnnee').value)
+    stState.mois = parseInt(c.querySelector('#fMoisSel').value)
+    stState.date_debut = c.querySelector('#fDebut').value
+    stState.date_fin = c.querySelector('#fFin').value
+    stState.mode = c.querySelector('#fMode').value
+    stState.filtre = c.querySelector('#fFiltre').value
+    stState.search = c.querySelector('#fSearch').value
+    loadTree()
+  }
+  c.querySelector('#fSearch').addEventListener('input', () => {
+    stState.search = c.querySelector('#fSearch').value
+    // debounce léger
+    clearTimeout(window.__restoSearchT)
+    window.__restoSearchT = setTimeout(loadTree, 250)
+  })
+  c.querySelector('#fFiltre').onchange = () => {
+    stState.filtre = c.querySelector('#fFiltre').value
+    loadTree()
+  }
+
+  loadTree()
 }
 
-function agentRestaurantModal(r, agents) {
+// Rendu d'une carte resto (arborescence)
+function renderRestoCard(r) {
+  const cl = r.checklist_progression || { ok: 0, total_obligatoire: 0, pct: 0 }
+  const a = r.alertes || {}
+  const docs = r.documents || {}
+
+  const statutBadges = []
+  if ((r.marques || []).some(m => m.is_portefeuille_proprietaire)) {
+    statutBadges.push('<span class="badge badge-gold"><i class="fas fa-crown"></i> Portefeuille</span>')
+  }
+  if (a.bloque_signature) statutBadges.push('<span class="badge badge-danger"><i class="fas fa-ban"></i> Bloqué signature</span>')
+  if ((a.nb_marques_refusees || 0) > 0) statutBadges.push(`<span class="badge badge-danger"><i class="fas fa-circle-xmark"></i> ${a.nb_marques_refusees} refus</span>`)
+  if ((a.nb_marques_en_attente || 0) > 0) statutBadges.push(`<span class="badge badge-warning"><i class="fas fa-clock"></i> ${a.nb_marques_en_attente} en attente</span>`)
+  if ((a.nb_docs_manquants || 0) > 0) statutBadges.push(`<span class="badge badge-warning"><i class="fas fa-file-circle-exclamation"></i> ${a.nb_docs_manquants} docs</span>`)
+
+  const apportePar = r.agent && r.agent.id === CURRENT_USER.id ? '<strong>Moi</strong>'
+    : (r.agent ? escapeHtml((r.agent.prenom || '') + ' ' + (r.agent.nom || '')) + ' ' + niveauPill(r.agent.niveau) : '-')
+
+  const pctColor = cl.pct >= 90 ? 'var(--primary)' : cl.pct >= 60 ? 'var(--accent)' : 'var(--danger)'
+
+  return `
+  <div class="card mb-3" data-resto-card="${r.id}" style="padding:0;overflow:hidden">
+    <div data-toggle-resto="${r.id}" style="cursor:pointer;padding:1rem 1.25rem;display:flex;align-items:center;gap:1rem;background:linear-gradient(90deg,var(--bg-soft) 0%,transparent 60%);border-bottom:1px solid var(--border)">
+      <i class="fas fa-chevron-right toggle-icon" style="color:var(--text-muted);width:14px"></i>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+          <h3 style="margin:0;font-size:1.05rem">${escapeHtml(r.nom)}</h3>
+          ${statutBadges.join(' ')}
+        </div>
+        <div class="text-muted" style="font-size:.85rem;margin-top:.25rem">
+          <i class="fas fa-location-dot"></i> ${escapeHtml(r.ville || '-')} · 
+          <i class="fas fa-user-tie"></i> ${apportePar} · 
+          <i class="fas fa-tags"></i> ${(r.marques || []).length} marque(s)
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:.7rem;text-transform:uppercase;color:var(--text-muted);letter-spacing:.04em">CA période</div>
+        <div style="font-weight:700;font-size:1.1rem">${fmtEUR(r.ca_periode || 0)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted)">${fmtNum(r.nb_commandes_periode || 0)} cmds</div>
+      </div>
+      <div style="text-align:right;min-width:120px">
+        <div style="font-size:.7rem;text-transform:uppercase;color:var(--text-muted);letter-spacing:.04em">Checklist</div>
+        <div style="font-weight:700;color:${pctColor}">${cl.ok}/${cl.total_obligatoire} (${cl.pct}%)</div>
+        <div style="height:4px;background:var(--bg-soft);border-radius:2px;overflow:hidden;margin-top:.25rem">
+          <div style="height:100%;width:${cl.pct}%;background:${pctColor};transition:width .3s"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:4px" onclick="event.stopPropagation()">
+        <button class="btn btn-sm btn-secondary" data-resto-edit="${r.id}" title="Modifier"><i class="fas fa-pen"></i></button>
+        <button class="btn btn-sm btn-primary" data-facturer="${r.id}" title="Facturer ce resto"><i class="fas fa-file-invoice"></i></button>
+        <button class="btn btn-sm btn-danger" data-resto-del="${r.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+      </div>
+    </div>
+
+    <div data-resto-body="${r.id}" style="display:none;padding:1.25rem">
+      <!-- Bloc Infos -->
+      <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:1rem">
+        <div><strong>SIRET :</strong> ${escapeHtml(r.siret || '—')}</div>
+        <div><strong>Gérant :</strong> ${escapeHtml(((r.gerant_prenom||'')+' '+(r.gerant_nom||'')).trim() || '—')}</div>
+        <div><strong>Tél gérant :</strong> ${escapeHtml(r.gerant_telephone || '—')}</div>
+        <div><strong>Email gérant :</strong> ${escapeHtml(r.gerant_email || '—')}</div>
+        <div><strong>Signature :</strong> ${r.date_signature ? fmtDate(r.date_signature) : '—'}</div>
+        <div><strong>Lancement :</strong> ${r.date_lancement ? fmtDate(r.date_lancement) : '—'}</div>
+      </div>
+
+      <!-- Bloc Checklist + Docs -->
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+        <div>
+          <div class="card-title" style="font-size:.95rem"><i class="fas fa-list-check"></i> Checklist (${cl.ok}/${cl.total_obligatoire})</div>
+          ${(r.checklist || []).length ? `<div style="display:flex;flex-direction:column;gap:.35rem;max-height:240px;overflow:auto">
+            ${(r.checklist || []).map(it => {
+              const okIcon = it.statut === 'valide' ? '<i class="fas fa-circle-check" style="color:var(--primary)"></i>'
+                : it.statut === 'fourni' ? '<i class="fas fa-hourglass-half" style="color:var(--accent)"></i>'
+                : '<i class="far fa-circle" style="color:var(--text-muted)"></i>'
+              return `<div style="display:flex;align-items:center;gap:.5rem;padding:.25rem .5rem;border-radius:6px;${it.obligatoire ? 'background:var(--bg-soft)' : ''}">
+                ${okIcon}
+                <span style="flex:1">${escapeHtml(it.libelle)}${it.obligatoire ? ' <span style="color:var(--danger);font-size:.8rem">*</span>' : ''}</span>
+                <span class="badge ${it.statut === 'valide' ? 'badge-success' : it.statut === 'fourni' ? 'badge-info' : 'badge-warning'}" style="font-size:.65rem">${it.statut}</span>
+              </div>`
+            }).join('')}
+          </div>` : '<p class="text-muted" style="font-size:.85rem">Aucun élément de checklist</p>'}
+        </div>
+        <div>
+          <div class="card-title" style="font-size:.95rem"><i class="fas fa-folder-open"></i> Documents</div>
+          ${['kbis','cni','rib','contrat_portefeuille'].map(t => {
+            const lab = { kbis:'KBIS', cni:'CNI gérant', rib:'RIB', contrat_portefeuille:'Contrat portefeuille' }[t]
+            const d = docs[t]
+            const fourni = d && d.fourni
+            const valide = d && d.valide
+            return `<div style="display:flex;align-items:center;gap:.5rem;padding:.35rem .5rem;border-radius:6px;background:var(--bg-soft);margin-bottom:.25rem">
+              <i class="fas fa-${fourni ? (valide ? 'circle-check' : 'hourglass-half') : 'file-circle-exclamation'}" style="color:${fourni ? (valide ? 'var(--primary)' : 'var(--accent)') : 'var(--danger)'}"></i>
+              <span style="flex:1">${lab}</span>
+              ${fourni
+                ? `<a class="btn btn-sm btn-secondary" href="/api/agent/documents/${d.id}/contenu" target="_blank" title="Voir / télécharger"><i class="fas fa-download"></i></a>`
+                : `<button class="btn btn-sm btn-primary" data-upload-doc="${r.id}" data-doc-type="${t}" data-doc-label="${escapeHtml(lab)}"><i class="fas fa-upload"></i></button>`}
+            </div>`
+          }).join('')}
+          ${r.rib_manuel_ok ? `<div class="text-muted" style="font-size:.78rem;margin-top:.25rem"><i class="fas fa-check"></i> RIB renseigné manuellement (IBAN, BIC, banque)</div>` : ''}
+        </div>
+      </div>
+
+      <!-- Bloc Marques -->
+      <div class="card-title" style="font-size:.95rem;justify-content:space-between;display:flex;align-items:center">
+        <span><i class="fas fa-tags"></i> Marques (${(r.marques || []).length})</span>
+        <button class="btn btn-sm btn-primary" data-add-marque="${r.id}"><i class="fas fa-plus"></i> Ajouter une marque</button>
+      </div>
+      ${(r.marques || []).length ? `<div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>#</th><th>Marque</th><th>Statut</th><th>Uber Store</th><th>Tablette</th>
+          <th class="text-right">Cmds</th><th class="text-right">CA</th><th class="text-right">Comm</th>
+          <th class="text-right">Actions</th>
+        </tr></thead>
+        <tbody>${(r.marques || []).map(m => {
+          const statutLabel = {
+            'en_creation': '<span class="badge badge-info">En création</span>',
+            'active': '<span class="badge badge-success">Active</span>',
+            'suspendue': '<span class="badge badge-warning">Suspendue</span>',
+            'portefeuille': '<span class="badge badge-gold">Portefeuille</span>',
+            'refusee': '<span class="badge badge-danger">Refusée</span>',
+            'en_attente': '<span class="badge badge-warning">En attente</span>'
+          }[m.statut_marque] || (m.actif ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-warning">Inactive</span>')
+          return `<tr>
+            <td>${m.rang_creation || '-'}</td>
+            <td><strong>${escapeHtml(m.nom)}</strong>
+              ${m.is_portefeuille_proprietaire ? '<span class="badge badge-gold" style="font-size:.6rem">100%</span>' : ''}
+              ${m.date_signature_portefeuille ? `<div class="text-muted" style="font-size:.7rem">Signé ${fmtDate(m.date_signature_portefeuille)}</div>` : ''}
+            </td>
+            <td>${statutLabel}</td>
+            <td><code style="font-size:.75rem">${escapeHtml(m.uber_store_id || '—')}</code></td>
+            <td>${m.tablette_fournie ? '<i class="fas fa-tablet-screen-button" style="color:var(--primary)"></i>' : '—'}</td>
+            <td class="text-right">${fmtNum(m.nb_commandes_periode || 0)}</td>
+            <td class="text-right">${fmtEUR(m.ca_periode || 0)}</td>
+            <td class="text-right">${fmtEUR(m.commissions_periode || 0)}</td>
+            <td class="text-right">
+              <button class="btn btn-sm btn-secondary" data-edit-marque="${m.id}" data-resto-id="${r.id}"><i class="fas fa-pen"></i></button>
+              <button class="btn btn-sm btn-danger" data-del-marque="${m.id}"><i class="fas fa-trash"></i></button>
+            </td>
+          </tr>`
+        }).join('')}</tbody>
+      </table></div>` : '<p class="text-muted" style="padding:.5rem">Aucune marque pour ce restaurant. Cliquez sur « Ajouter une marque ».</p>'}
+    </div>
+  </div>`
+}
+
+// --- Modal restaurant (créa / édition) — enrichi avec gérant + RIB manuel + portefeuille ---
+function agentRestaurantModal(r, agents, onSaved) {
   const isEdit = !!r
   const opts = agents.map(a => `<option value="${a.id}" ${(r?.agent_id || CURRENT_USER.id) == a.id ? 'selected' : ''}>${a.id === CURRENT_USER.id ? 'Moi' : escapeHtml(a.prenom + ' ' + a.nom)} (${niveauLabel(a.niveau)})</option>`).join('')
   const m = modal(isEdit ? 'Modifier le restaurant' : 'Nouveau restaurant', `
     <form id="rForm">
+      <div class="card-title" style="font-size:.95rem"><i class="fas fa-store"></i> Restaurant</div>
       <div class="form-grid">
         <div class="form-group" style="grid-column:1/-1"><label>Nom <span class="req">*</span></label><input id="nom" required value="${escapeHtml(r?.nom || '')}"/></div>
         <div class="form-group"><label>Raison sociale</label><input id="raison_sociale" value="${escapeHtml(r?.raison_sociale || '')}"/></div>
@@ -4148,7 +4488,6 @@ function agentRestaurantModal(r, agents) {
         <div class="form-group"><label>Ville</label><input id="ville" value="${escapeHtml(r?.ville || '')}"/></div>
         <div class="form-group"><label>Téléphone</label><input id="telephone" value="${escapeHtml(r?.telephone || '')}"/></div>
         <div class="form-group"><label>Email</label><input id="email" type="email" value="${escapeHtml(r?.email || '')}"/></div>
-        <div class="form-group"><label>Contact</label><input id="contact_nom" value="${escapeHtml(r?.contact_nom || '')}"/></div>
         <div class="form-group"><label>Apporté par</label><select id="agent_id">${opts}</select></div>
         <div class="form-group"><label>Date signature</label><input id="date_signature" type="date" value="${r?.date_signature || ''}"/></div>
         <div class="form-group"><label>Date lancement</label><input id="date_lancement" type="date" value="${r?.date_lancement || ''}"/></div>
@@ -4159,13 +4498,44 @@ function agentRestaurantModal(r, agents) {
             <option value="1" ${r?.tablette_sr_shop ? 'selected' : ''}>Oui (+0.05 € / commande)</option>
           </select>
         </div>
-        <div class="form-group" style="grid-column:1/-1"><label>Notes</label><textarea id="notes" rows="2">${escapeHtml(r?.notes || '')}</textarea></div>
       </div>
+
+      <div class="card-title" style="font-size:.95rem;margin-top:1rem"><i class="fas fa-user-tie"></i> Gérant</div>
+      <div class="form-grid">
+        <div class="form-group"><label>Nom gérant</label><input id="gerant_nom" value="${escapeHtml(r?.gerant_nom || '')}"/></div>
+        <div class="form-group"><label>Prénom gérant</label><input id="gerant_prenom" value="${escapeHtml(r?.gerant_prenom || '')}"/></div>
+        <div class="form-group"><label>Téléphone gérant</label><input id="gerant_telephone" value="${escapeHtml(r?.gerant_telephone || '')}"/></div>
+        <div class="form-group"><label>Email gérant</label><input id="gerant_email" type="email" value="${escapeHtml(r?.gerant_email || '')}"/></div>
+      </div>
+
+      <div class="card-title" style="font-size:.95rem;margin-top:1rem"><i class="fas fa-building-columns"></i> RIB manuel (si pas d'upload)</div>
+      <div class="form-grid">
+        <div class="form-group"><label>Titulaire</label><input id="rib_titulaire" value="${escapeHtml(r?.rib_titulaire || '')}"/></div>
+        <div class="form-group"><label>Banque</label><input id="rib_banque_nom" value="${escapeHtml(r?.rib_banque_nom || '')}"/></div>
+        <div class="form-group" style="grid-column:1/-1"><label>IBAN</label><input id="rib_iban" value="${escapeHtml(r?.rib_iban || '')}"/></div>
+        <div class="form-group"><label>BIC / SWIFT</label><input id="rib_bic" value="${escapeHtml(r?.rib_bic || '')}"/></div>
+        <div class="form-group"><label>Références</label><input id="rib_references" value="${escapeHtml(r?.rib_references || '')}"/></div>
+      </div>
+
+      <div class="card-title" style="font-size:.95rem;margin-top:1rem"><i class="fas fa-crown"></i> Portefeuille propriétaire</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Statut</label>
+          <select id="is_portefeuille_proprietaire">
+            <option value="0" ${!r?.is_portefeuille_proprietaire ? 'selected' : ''}>Non</option>
+            <option value="1" ${r?.is_portefeuille_proprietaire ? 'selected' : ''}>Oui (signature portefeuille)</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Date signature portefeuille</label><input id="date_signature_portefeuille" type="date" value="${r?.date_signature_portefeuille || ''}"/></div>
+      </div>
+
+      <div class="form-group" style="margin-top:1rem"><label>Notes</label><textarea id="notes" rows="2">${escapeHtml(r?.notes || '')}</textarea></div>
+
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" id="cancelBtn">Annuler</button>
         <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Enregistrer</button>
       </div>
-    </form>`)
+    </form>`, { size: 'lg' })
   m.el.querySelector('#cancelBtn').onclick = m.close
   m.el.querySelector('#rForm').onsubmit = async e => {
     e.preventDefault()
@@ -4175,26 +4545,283 @@ function agentRestaurantModal(r, agents) {
       siret: get('siret').trim() || null, adresse: get('adresse').trim() || null,
       code_postal: get('code_postal').trim() || null, ville: get('ville').trim() || null,
       telephone: get('telephone').trim() || null, email: get('email').trim() || null,
-      contact_nom: get('contact_nom').trim() || null,
       agent_id: parseInt(get('agent_id')),
       date_signature: get('date_signature') || null, date_lancement: get('date_lancement') || null,
       tablette_sr_shop: parseInt(get('tablette_sr_shop')),
+      gerant_nom: get('gerant_nom').trim() || null,
+      gerant_prenom: get('gerant_prenom').trim() || null,
+      gerant_telephone: get('gerant_telephone').trim() || null,
+      gerant_email: get('gerant_email').trim() || null,
+      rib_titulaire: get('rib_titulaire').trim() || null,
+      rib_banque_nom: get('rib_banque_nom').trim() || null,
+      rib_iban: get('rib_iban').trim() || null,
+      rib_bic: get('rib_bic').trim() || null,
+      rib_references: get('rib_references').trim() || null,
+      is_portefeuille_proprietaire: parseInt(get('is_portefeuille_proprietaire')),
+      date_signature_portefeuille: get('date_signature_portefeuille') || null,
       notes: get('notes').trim() || null
     }
     try {
       if (isEdit) await api.put('/agent/restaurants/' + r.id, payload)
       else await api.post('/agent/restaurants', payload)
-      toast('Enregistré'); m.close(); navigate('a-restaurants')
+      toast('Enregistré'); m.close()
+      if (onSaved) onSaved(); else navigate('a-restaurants')
     } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
   }
 }
 
+// --- Modal marque (créa / édition) — enrichi Uber Manager + Uber Orders + tablette + commission_info ---
+function agentMarqueModal(restoId, mq, parentModal, onSaved) {
+  const isEdit = !!mq
+  const m = modal(isEdit ? 'Modifier la marque' : 'Nouvelle marque virtuelle', `
+    <form id="mForm">
+      <div class="card-title" style="font-size:.95rem"><i class="fas fa-tag"></i> Marque</div>
+      <div class="form-grid">
+        <div class="form-group" style="grid-column:1/-1"><label>Nom <span class="req">*</span></label><input id="nom" required value="${escapeHtml(mq?.nom || '')}"/></div>
+        <div class="form-group"><label>Plateforme</label>
+          <select id="plateforme">
+            <option value="uber_eats" ${!mq || mq.plateforme === 'uber_eats' ? 'selected' : ''}>Uber Eats</option>
+            <option value="deliveroo" ${mq?.plateforme === 'deliveroo' ? 'selected' : ''}>Deliveroo</option>
+            <option value="just_eat" ${mq?.plateforme === 'just_eat' ? 'selected' : ''}>Just Eat</option>
+            <option value="autre" ${mq?.plateforme === 'autre' ? 'selected' : ''}>Autre</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Uber Store ID</label><input id="uber_store_id" value="${escapeHtml(mq?.uber_store_id || '')}"/></div>
+        <div class="form-group"><label>Date lancement</label><input id="date_lancement" type="date" value="${mq?.date_lancement || ''}"/></div>
+        <div class="form-group"><label>Statut marque</label>
+          <select id="statut_marque">
+            ${['en_creation','active','suspendue','portefeuille','refusee','en_attente'].map(s =>
+              `<option value="${s}" ${(mq?.statut_marque || 'en_creation') === s ? 'selected' : ''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>Active ?</label>
+          <select id="actif"><option value="1" ${!mq || mq.actif ? 'selected' : ''}>Oui</option><option value="0" ${mq && !mq.actif ? 'selected' : ''}>Non</option></select>
+        </div>
+      </div>
+
+      <div class="card-title" style="font-size:.95rem;margin-top:1rem"><i class="fas fa-key"></i> Accès Uber Eats Manager</div>
+      <div class="form-grid">
+        <div class="form-group"><label>Email</label><input id="uber_manager_email" type="email" value="${escapeHtml(mq?.uber_manager_email || '')}"/></div>
+        <div class="form-group"><label>Mot de passe</label><input id="uber_manager_password" type="text" value="${escapeHtml(mq?.uber_manager_password || '')}"/></div>
+        <div class="form-group" style="grid-column:1/-1"><label>URL</label><input id="uber_manager_url" value="${escapeHtml(mq?.uber_manager_url || '')}"/></div>
+      </div>
+
+      <div class="card-title" style="font-size:.95rem;margin-top:1rem"><i class="fas fa-tablet-screen-button"></i> Accès Uber Eats Orders / Tablette</div>
+      <div class="form-grid">
+        <div class="form-group"><label>Email</label><input id="uber_orders_email" type="email" value="${escapeHtml(mq?.uber_orders_email || '')}"/></div>
+        <div class="form-group"><label>Mot de passe</label><input id="uber_orders_password" type="text" value="${escapeHtml(mq?.uber_orders_password || '')}"/></div>
+        <div class="form-group" style="grid-column:1/-1"><label>URL</label><input id="uber_orders_url" value="${escapeHtml(mq?.uber_orders_url || '')}"/></div>
+        <div class="form-group">
+          <label>Tablette fournie ?</label>
+          <select id="tablette_fournie">
+            <option value="0" ${!mq?.tablette_fournie ? 'selected' : ''}>Non</option>
+            <option value="1" ${mq?.tablette_fournie ? 'selected' : ''}>Oui</option>
+          </select>
+        </div>
+        <div class="form-group"><label>N° série tablette</label><input id="tablette_serial" value="${escapeHtml(mq?.tablette_serial || '')}"/></div>
+        <div class="form-group" style="grid-column:1/-1"><label>Notes tablette</label><input id="tablette_notes" value="${escapeHtml(mq?.tablette_notes || '')}"/></div>
+      </div>
+
+      <div class="card-title" style="font-size:.95rem;margin-top:1rem"><i class="fas fa-circle-info"></i> Commissions & opérationnel</div>
+      <div class="form-grid">
+        <div class="form-group" style="grid-column:1/-1"><label>Infos commission (libre)</label><textarea id="commission_info" rows="2">${escapeHtml(mq?.commission_info || '')}</textarea></div>
+        <div class="form-group" style="grid-column:1/-1"><label>Accès / infos opérationnels</label><textarea id="acces_operationnels" rows="2">${escapeHtml(mq?.acces_operationnels || '')}</textarea></div>
+      </div>
+
+      <div class="card-title" style="font-size:.95rem;margin-top:1rem"><i class="fas fa-crown"></i> Portefeuille 100%</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Statut portefeuille</label>
+          <select id="is_portefeuille_proprietaire">
+            <option value="0" ${!mq?.is_portefeuille_proprietaire ? 'selected' : ''}>Non</option>
+            <option value="1" ${mq?.is_portefeuille_proprietaire ? 'selected' : ''}>Oui</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Date signature portefeuille</label>
+          <input id="date_signature_portefeuille" type="date" value="${mq?.date_signature_portefeuille || ''}"/>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:1rem"><label>Notes</label><textarea id="notes" rows="2">${escapeHtml(mq?.notes || '')}</textarea></div>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" id="cancelBtn">Annuler</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Enregistrer</button>
+      </div>
+    </form>`, { size: 'lg' })
+  m.el.querySelector('#cancelBtn').onclick = m.close
+  m.el.querySelector('#mForm').onsubmit = async e => {
+    e.preventDefault()
+    const get = id => m.el.querySelector('#' + id).value
+    const payload = {
+      nom: get('nom').trim(),
+      plateforme: get('plateforme'),
+      uber_store_id: get('uber_store_id').trim() || null,
+      date_lancement: get('date_lancement') || null,
+      statut_marque: get('statut_marque'),
+      actif: parseInt(get('actif')),
+      uber_manager_email: get('uber_manager_email').trim() || null,
+      uber_manager_password: get('uber_manager_password').trim() || null,
+      uber_manager_url: get('uber_manager_url').trim() || null,
+      uber_orders_email: get('uber_orders_email').trim() || null,
+      uber_orders_password: get('uber_orders_password').trim() || null,
+      uber_orders_url: get('uber_orders_url').trim() || null,
+      tablette_fournie: parseInt(get('tablette_fournie')),
+      tablette_serial: get('tablette_serial').trim() || null,
+      tablette_notes: get('tablette_notes').trim() || null,
+      commission_info: get('commission_info').trim() || null,
+      acces_operationnels: get('acces_operationnels').trim() || null,
+      is_portefeuille_proprietaire: parseInt(get('is_portefeuille_proprietaire')),
+      date_signature_portefeuille: get('date_signature_portefeuille') || null,
+      notes: get('notes').trim() || null
+    }
+    try {
+      if (isEdit) await api.put('/agent/marques/' + mq.id, payload)
+      else await api.post(`/agent/restaurants/${restoId}/marques`, payload)
+      toast('Enregistré'); m.close()
+      if (parentModal) parentModal.close()
+      if (onSaved) onSaved()
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
+}
+
+// --- Modal facture ciblée (resto + marque + période) ---
+function agentFactureCibleeModal(resto) {
+  const marques = resto.marques || []
+  const now = new Date()
+  const m = modal('Facturer ' + resto.nom, `
+    <form id="fForm">
+      <div class="form-grid">
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Marque (optionnel — laissez « Toutes » pour le resto entier)</label>
+          <select id="marque_id">
+            <option value="">Toutes les marques du resto</option>
+            ${marques.map(mq => `<option value="${mq.id}">${escapeHtml(mq.nom)}${mq.is_portefeuille_proprietaire ? ' (Portefeuille)' : ''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Mode période</label>
+          <select id="mode">
+            <option value="mois">Mois</option>
+            <option value="custom">Plage personnalisée</option>
+          </select>
+        </div>
+        <div class="form-group" id="grpA"><label>Année</label><input id="annee" type="number" value="${now.getFullYear()}" min="2024" max="2030"/></div>
+        <div class="form-group" id="grpM"><label>Mois</label>
+          <select id="mois">${monthsFR.map((mm,i)=>`<option value="${i+1}" ${i+1===now.getMonth()+1?'selected':''}>${mm}</option>`).join('')}</select>
+        </div>
+        <div class="form-group" id="grpD1" style="display:none"><label>Du</label><input id="date_debut" type="date"/></div>
+        <div class="form-group" id="grpD2" style="display:none"><label>Au</label><input id="date_fin" type="date"/></div>
+        <div class="form-group" style="grid-column:1/-1"><label>Notes</label><textarea id="notes" rows="2"></textarea></div>
+      </div>
+      <div id="preview" class="mt-3"></div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" id="cancelBtn">Annuler</button>
+        <button type="button" class="btn btn-secondary" id="btnPreview"><i class="fas fa-eye"></i> Aperçu</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-file-invoice"></i> Créer brouillon</button>
+      </div>
+    </form>`, { size: 'lg' })
+  m.el.querySelector('#cancelBtn').onclick = m.close
+  m.el.querySelector('#mode').onchange = (e) => {
+    const v = e.target.value
+    m.el.querySelector('#grpA').style.display = v === 'mois' ? '' : 'none'
+    m.el.querySelector('#grpM').style.display = v === 'mois' ? '' : 'none'
+    m.el.querySelector('#grpD1').style.display = v === 'custom' ? '' : 'none'
+    m.el.querySelector('#grpD2').style.display = v === 'custom' ? '' : 'none'
+  }
+
+  function buildPayload() {
+    const get = id => m.el.querySelector('#' + id).value
+    const mode = get('mode')
+    const p = { restaurant_id: resto.id }
+    const mq = get('marque_id')
+    if (mq) p.marque_id = parseInt(mq)
+    if (mode === 'mois') {
+      p.annee = parseInt(get('annee'))
+      p.mois = parseInt(get('mois'))
+    } else {
+      p.date_debut = get('date_debut')
+      p.date_fin = get('date_fin')
+    }
+    return p
+  }
+
+  m.el.querySelector('#btnPreview').onclick = async () => {
+    try {
+      const { data } = await api.post('/factures/agent/preview', buildPayload())
+      m.el.querySelector('#preview').innerHTML = data.lignes.length ? `
+        <div class="card"><div class="card-title"><i class="fas fa-list"></i> Aperçu — ${escapeHtml(data.periode.label)}</div>
+          <table class="data-table"><thead><tr><th>Libellé</th><th class="text-right">Qté</th><th class="text-right">PU</th><th class="text-right">HT</th></tr></thead>
+          <tbody>${data.lignes.map(l => `<tr>
+            <td>${escapeHtml(l.libelle)}<div class="text-muted" style="font-size:.75rem">${escapeHtml(l.description)}</div></td>
+            <td class="text-right">${fmtNum(l.quantite)}</td>
+            <td class="text-right">${fmtEUR(l.prix_unitaire)}</td>
+            <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
+          </tr>`).join('')}
+          <tr><td colspan="3" class="text-right"><strong>Total HT</strong></td><td class="text-right"><strong>${fmtEUR(data.total)}</strong></td></tr>
+          </tbody></table></div>` : '<p class="text-muted">Aucune commission à facturer pour cette sélection.</p>'
+    } catch (err) { toast(err.response?.data?.error || 'Erreur preview', 'error') }
+  }
+
+  m.el.querySelector('#fForm').onsubmit = async e => {
+    e.preventDefault()
+    const p = buildPayload()
+    p.notes = m.el.querySelector('#notes').value.trim() || null
+    try {
+      const r = await api.post('/factures/agent/create', p)
+      toast('Facture créée : ' + (r.data.numero || '#' + r.data.id))
+      m.close()
+      if (typeof loadTree === 'function') loadTree()
+    } catch (err) { toast(err.response?.data?.error || 'Erreur création', 'error') }
+  }
+}
+
+// --- Modal upload document (KBIS / CNI / RIB / contrat) ---
+function agentUploadDocModal(restaurantId, docType, docLabel, onUploaded) {
+  const m = modal('Upload ' + docLabel, `
+    <form id="dForm">
+      <p class="text-muted">Sélectionnez un fichier (PDF / image, max 5 Mo) pour le document <strong>${escapeHtml(docLabel)}</strong>.</p>
+      <div class="form-group"><label>Fichier <span class="req">*</span></label><input type="file" id="fichier" accept=".pdf,image/*" required/></div>
+      <div class="form-group"><label>Commentaire (optionnel)</label><input id="commentaire"/></div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" id="cancelBtn">Annuler</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-upload"></i> Téléverser</button>
+      </div>
+    </form>`)
+  m.el.querySelector('#cancelBtn').onclick = m.close
+  m.el.querySelector('#dForm').onsubmit = async e => {
+    e.preventDefault()
+    const f = m.el.querySelector('#fichier').files[0]
+    if (!f) return toast('Sélectionnez un fichier', 'error')
+    if (f.size > 5 * 1024 * 1024) return toast('Fichier trop volumineux (max 5 Mo)', 'error')
+    const reader = new FileReader()
+    reader.onload = async () => {
+      const b64 = reader.result.split(',')[1]
+      try {
+        await api.post('/agent/documents', {
+          restaurant_id: restaurantId,
+          type_document: docType,
+          nom_fichier: f.name,
+          mime_type: f.type,
+          taille: f.size,
+          contenu_base64: b64,
+          commentaire: m.el.querySelector('#commentaire').value.trim() || null
+        })
+        toast('Document téléversé'); m.close(); if (onUploaded) onUploaded()
+      } catch (err) { toast(err.response?.data?.error || 'Erreur upload', 'error') }
+    }
+    reader.readAsDataURL(f)
+  }
+}
+
+// Compat : agentRestaurantDetail (popup détaillé) — conservé pour les anciens appels (admin marques etc.)
 async function agentRestaurantDetail(id) {
   const { data } = await api.get('/agent/restaurants/' + id)
   const r = data.restaurant, marques = data.marques
   const m = modal(`${r.nom} — Marques virtuelles`, `
     <div class="form-grid mb-3">
-      <div><strong>Apporté par :</strong> ${r.agent_id === CURRENT_USER.id ? 'Moi' : escapeHtml(r.agent_prenom + ' ' + r.agent_nom)}</div>
+      <div><strong>Apporté par :</strong> ${r.agent_id === CURRENT_USER.id ? 'Moi' : escapeHtml((r.agent_prenom||'') + ' ' + (r.agent_nom||''))}</div>
       <div><strong>Rang :</strong> #${r.rang_apport || '-'} ${r.is_portefeuille_proprietaire ? '<span class="badge badge-gold">PORTEFEUILLE</span>' : ''}</div>
     </div>
     <div class="card-title"><i class="fas fa-tags"></i> Marques (${marques.length})
@@ -4211,54 +4838,18 @@ async function agentRestaurantDetail(id) {
           <td class="text-right">${fmtNum(mq.nb_commandes)}</td>
           <td class="text-right">${fmtEUR(mq.ca_total)}</td>
           <td class="text-right">
-            <button class="btn btn-sm btn-secondary" data-em="${mq.id}" data-mqd='${escapeHtml(JSON.stringify(mq))}'><i class="fas fa-pen"></i></button>
+            <button class="btn btn-sm btn-secondary" data-em="${mq.id}"><i class="fas fa-pen"></i></button>
             <button class="btn btn-sm btn-danger" data-dm="${mq.id}"><i class="fas fa-trash"></i></button>
           </td>
         </tr>`).join('') : '<tr><td colspan="7" class="text-center text-muted">Aucune marque</td></tr>'}</tbody>
     </table>`)
-  m.el.querySelector('#btnAdd').onclick = () => agentMarqueModal(id, null, m)
-  m.el.querySelectorAll('[data-em]').forEach(b => b.onclick = () => agentMarqueModal(id, JSON.parse(b.dataset.mqd.replace(/&quot;/g, '"').replace(/&amp;/g, '&')), m))
+  m.el.querySelector('#btnAdd').onclick = () => agentMarqueModal(id, null, m, () => { m.close(); agentRestaurantDetail(id) })
+  m.el.querySelectorAll('[data-em]').forEach(b => b.onclick = () => {
+    const mq = marques.find(x => x.id == b.dataset.em)
+    agentMarqueModal(id, mq, m, () => { m.close(); agentRestaurantDetail(id) })
+  })
   m.el.querySelectorAll('[data-dm]').forEach(b => b.onclick = () => confirmDialog('Supprimer cette marque ?',
     async () => { await api.delete('/agent/marques/' + b.dataset.dm); toast('Supprimé'); m.close(); agentRestaurantDetail(id) }))
-}
-
-function agentMarqueModal(restoId, mq, parentModal) {
-  const isEdit = !!mq
-  const m = modal(isEdit ? 'Modifier la marque' : 'Nouvelle marque virtuelle', `
-    <form id="mForm">
-      <div class="form-grid">
-        <div class="form-group" style="grid-column:1/-1"><label>Nom <span class="req">*</span></label><input id="nom" required value="${escapeHtml(mq?.nom || '')}"/></div>
-        <div class="form-group"><label>Plateforme</label>
-          <select id="plateforme">
-            <option value="uber_eats" ${!mq || mq.plateforme === 'uber_eats' ? 'selected' : ''}>Uber Eats</option>
-            <option value="deliveroo" ${mq?.plateforme === 'deliveroo' ? 'selected' : ''}>Deliveroo</option>
-            <option value="just_eat" ${mq?.plateforme === 'just_eat' ? 'selected' : ''}>Just Eat</option>
-            <option value="autre" ${mq?.plateforme === 'autre' ? 'selected' : ''}>Autre</option>
-          </select>
-        </div>
-        <div class="form-group"><label>Uber Store ID</label><input id="uber_store_id" value="${escapeHtml(mq?.uber_store_id || '')}"/></div>
-        <div class="form-group"><label>Date lancement</label><input id="date_lancement" type="date" value="${mq?.date_lancement || ''}"/></div>
-        <div class="form-group" style="grid-column:1/-1"><label>Notes</label><textarea id="notes" rows="2">${escapeHtml(mq?.notes || '')}</textarea></div>
-      </div>
-      <div class="form-actions">
-        <button type="button" class="btn btn-secondary" id="cancelBtn">Annuler</button>
-        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Enregistrer</button>
-      </div>
-    </form>`)
-  m.el.querySelector('#cancelBtn').onclick = m.close
-  m.el.querySelector('#mForm').onsubmit = async e => {
-    e.preventDefault()
-    const get = id => m.el.querySelector('#' + id).value
-    const payload = { nom: get('nom').trim(), plateforme: get('plateforme'),
-      uber_store_id: get('uber_store_id').trim() || null, date_lancement: get('date_lancement') || null,
-      notes: get('notes').trim() || null }
-    try {
-      if (isEdit) await api.put('/agent/marques/' + mq.id, payload)
-      else await api.post(`/agent/restaurants/${restoId}/marques`, payload)
-      toast('Enregistré'); m.close()
-      if (parentModal) { parentModal.close(); agentRestaurantDetail(restoId) }
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
-  }
 }
 
 // --- Imports agent ---
