@@ -1,4 +1,42 @@
-# 🍔 Suivi Commissions Uber Eats - MLM
+# 🍔 DropEat™ - Suivi Commissions Uber Eats - MLM
+
+## ⚠️ DÉPLOIEMENT — LIRE EN PREMIER
+
+**Problème connu** : un `wrangler pages deploy` ne déploie que le **code**, **PAS la base D1**. Si vous avez 36 commerciaux + restaurants en local et que vous faites `Hosted Deployment`, la base distante reste vide.
+
+### Workflow de déploiement complet (préserve les commerciaux)
+
+```bash
+# 1. Exporter la base locale (37 users + 16 restos + 8 marques + 471 lignes)
+npm run db:export:prod
+#   → génère seed-production.sql
+
+# 2. Build + déployer le code
+npm run build
+npx wrangler pages deploy dist --project-name webapp
+
+# 3. Appliquer les migrations sur la D1 distante (1ère fois ou nouvelles migrations)
+npm run db:migrate:prod
+
+# 4. Injecter le seed complet (commerciaux, restos, marques, paliers, etc.)
+npm run db:seed:prod
+```
+
+**Raccourci** : `npm run deploy:full` enchaîne export → build → deploy.
+Il faut **ensuite** lancer manuellement `npm run db:migrate:prod && npm run db:seed:prod`
+(commandes interactives wrangler `--remote`).
+
+Scripts disponibles :
+| Script | Action |
+|--------|--------|
+| `npm run db:export:prod` | Génère `seed-production.sql` depuis la DB locale |
+| `npm run db:seed:prod` | Applique `seed-production.sql` sur D1 distante |
+| `npm run db:migrate:prod` | Applique les migrations sur D1 distante |
+| `npm run db:console:prod` | Console SQL interactive sur D1 distante |
+| `npm run deploy` | Build + deploy code seul (sans DB) |
+| `npm run deploy:full` | Export DB + build + deploy code (DB à seeder ensuite) |
+
+---
 
 ## Vue d'ensemble
 
