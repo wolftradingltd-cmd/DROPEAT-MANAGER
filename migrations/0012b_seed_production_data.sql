@@ -1,8 +1,9 @@
 -- ============================================================
--- Migration 0014 : SEED PRODUCTION (transformation de seed-production.sql)
+-- Migration 0012b : SEED PRODUCTION (transformation de seed-production.sql)
 -- ------------------------------------------------------------
 -- Cette migration injecte toutes les données de seed-production.sql
 -- pour que Genspark Hosted Deploy les applique automatiquement.
+-- S'exécute APRÈS 0012_challenges.sql et AVANT 0013_seed_restaurants_commerciaux.sql
 -- ------------------------------------------------------------
 -- Contient :
 --   - config (14 lignes)
@@ -18,8 +19,13 @@
 -- IMPORTANT : tous les INSERT utilisent "OR IGNORE" pour être
 -- idempotents. La migration 0013 (qui ajoute les restos/marques
 -- RÉELS id ≥ 17 et ≥ 9) reste compatible.
+--
+-- Les FK sont désactivées le temps de la migration pour permettre
+-- des inserts dans n'importe quel ordre (le fichier source ne respecte
+-- pas toujours l'ordre topologique des dépendances).
 -- ============================================================
 
+PRAGMA defer_foreign_keys = ON;
 
 -- ============================================================
 -- CONFIG (14 lignes)
