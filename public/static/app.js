@@ -281,6 +281,7 @@ const ADMIN_NAV = [
   { id: 'imports', label: 'Imports CSV', icon: 'fa-file-csv' },
   { id: 'commissions', label: 'Commissions', icon: 'fa-coins' },
   { id: 'paiements', label: 'Paiements', icon: 'fa-money-check-dollar' },
+  { id: 'admin-demandes-paiement', label: 'Demandes de paiement', icon: 'fa-hand-holding-dollar' },
   { id: 'attributions', label: 'Demandes 5e marque', icon: 'fa-trophy' },
   { section: 'FACTURATION' },
   { id: 'admin-factures', label: 'Factures reçues / émises', icon: 'fa-file-invoice-dollar' },
@@ -302,6 +303,7 @@ const AGENT_NAV = [
   { id: 'a-commissions', label: 'Mes commissions', icon: 'fa-coins' },
   { id: 'a-historique-comm', label: 'Historique commissions', icon: 'fa-chart-line' },
   { id: 'a-historique', label: 'Historique paiements', icon: 'fa-receipt' },
+  { id: 'a-demandes-paiement', label: 'Demander un paiement', icon: 'fa-hand-holding-dollar' },
   { section: 'FACTURATION' },
   { id: 'a-profil-societe', label: 'Ma société', icon: 'fa-building' },
   { id: 'a-factures', label: 'Mes factures', icon: 'fa-file-invoice-dollar' },
@@ -3846,14 +3848,16 @@ PAGES['profil'] = PAGES['a-profil'] = async (c) => {
 PAGES['a-dashboard'] = async (c) => {
   const now = new Date()
   const annee = now.getFullYear(), mois = now.getMonth() + 1
-  const [me, com, codesR, tree, histR, portR] = await Promise.all([
+  const [me, com, codesR, tree, histR, portR, cumR] = await Promise.all([
     api.get('/agent/me'),
     api.get(`/agent/commissions?annee=${annee}&mois=${mois}`),
     api.get('/agent/sous-agents/codes').catch(() => ({ data: { codes: [] } })),
     api.get(`/agent/mlm-tree?annee=${annee}&mois=${mois}`).catch(() => ({ data: { filleuls: [], total_n1: 0, total_n2: 0 } })),
     api.get('/agent/commissions/history?type=monthly').catch(() => ({ data: { history: [] } })),
-    api.get(`/agent/portefeuille?annee=${annee}&mois=${mois}`).catch(() => ({ data: { marques_portefeuille: [], stats: { nb_marques_portefeuille: 0, ca_periode: 0, commissions_periode: 0, nb_commandes_periode: 0 } } }))
+    api.get(`/agent/portefeuille?annee=${annee}&mois=${mois}`).catch(() => ({ data: { marques_portefeuille: [], stats: { nb_marques_portefeuille: 0, ca_periode: 0, commissions_periode: 0, nb_commandes_periode: 0 } } })),
+    api.get('/demandes-paiement/cumul').catch(() => ({ data: { cumul: { total_disponible: 0, total_propre: 0, total_portefeuille: 0, total_n1: 0, total_n2: 0, nb_periodes: 0, seuil_min: 20, eligible: false } } }))
   ])
+  const cumul = cumR.data.cumul || { total_disponible: 0, seuil_min: 20, eligible: false }
   const u = me.data.user, s = me.data.stats, d = com.data.detail
   const reste = me.data.reste_avant_portefeuille
   const myRestos = s.nb_restaurants_propres
@@ -3882,7 +3886,14 @@ PAGES['a-dashboard'] = async (c) => {
       <div class="stat-card primary"><div class="stat-label">Mes commissions du mois</div><div class="stat-value">${fmtEUR(d.total)}</div><div class="stat-extra">${monthsFR[mois-1]} ${annee}</div></div>
       <div class="stat-card accent"><div class="stat-label">Mes restaurants directs</div><div class="stat-value">${s.nb_restaurants_propres}</div><div class="stat-extra">${s.nb_marques} marques · ${s.nb_restaurants} dans ma branche</div></div>
       <div class="stat-card gold"><div class="stat-label">Mon réseau MLM</div><div class="stat-value">${mlmTree.total_n1} <span style="font-size:0.8rem;color:#6b7280">+ ${mlmTree.total_n2}</span></div><div class="stat-extra">${mlmTree.total_n1} filleul${mlmTree.total_n1 > 1 ? 's' : ''} N+1 · ${mlmTree.total_n2} sous-filleul${mlmTree.total_n2 > 1 ? 's' : ''} N+2</div></div>
-      <div class="stat-card info"><div class="stat-label">Statut paiement</div><div class="stat-value" style="font-size:1.1rem">${com.data.paiement_existant ? (com.data.paiement_existant.statut === 'paye' ? '<span class="text-success"><i class="fas fa-check-circle"></i> Payé</span>' : '<span class="text-danger">En attente</span>') : '<span class="text-muted">Non traité</span>'}</div></div>
+      <div class="stat-card info" style="${cumul.eligible ? 'cursor:pointer;border-left:3px solid #06A05A' : ''}" ${cumul.eligible ? 'data-goto="a-demandes-paiement"' : ''}>
+        <div class="stat-label">Cumul à demander</div>
+        <div class="stat-value" style="color:${cumul.eligible ? '#06A05A' : '#64748b'}">${fmtEUR(cumul.total_disponible || 0)}</div>
+        <div class="stat-extra">${cumul.eligible
+          ? `<i class="fas fa-hand-holding-dollar"></i> Cliquez pour demander (seuil ${fmtEUR(cumul.seuil_min)})`
+          : `Seuil minimum ${fmtEUR(cumul.seuil_min)} non atteint`
+        }</div>
+      </div>
     </div>
 
     <!-- ===== ARBORESCENCE MLM 2 NIVEAUX (style org-chart) ===== -->
@@ -4157,6 +4168,10 @@ PAGES['a-dashboard'] = async (c) => {
   document.getElementById('qaAddSousAgent').onclick = () => quickSousAgentModal(() => navigate('a-dashboard'))
   document.getElementById('qaAddProspect').onclick = () => navigate('a-prospects')
   document.getElementById('qaImport').onclick = () => navigate('a-imports')
+  // Card "Cumul à demander" cliquable si éligible
+  c.querySelectorAll('[data-goto]').forEach(el => {
+    el.onclick = () => navigate(el.dataset.goto)
+  })
   const goAttr = document.getElementById('goAttribution')
   if (goAttr) goAttr.onclick = () => navigate('a-attribution')
   const goSA = document.getElementById('goSousAgents')
@@ -5178,6 +5193,376 @@ PAGES['a-historique'] = async (c) => {
     </table></div>`
 }
 
+// ============================================================
+// === DEMANDES DE PAIEMENT (agent) ===========================
+// ============================================================
+PAGES['a-demandes-paiement'] = async (c) => {
+  const [cum, mine] = await Promise.all([
+    api.get('/demandes-paiement/cumul'),
+    api.get('/demandes-paiement/mine')
+  ])
+  const cumul = cum.data.cumul || {}
+  const demandes = mine.data.demandes || []
+
+  const eligible = !!cumul.eligible
+  const seuilMin = cumul.seuil_min || 20
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-hand-holding-dollar"></i> Demander un paiement</h1>
+        <div class="subtitle">Récupérez vos commissions cumulées dès <strong>${fmtEUR(seuilMin)}</strong> minimum</div>
+      </div>
+    </div>
+
+    <!-- Card cumul disponible -->
+    <div class="card mb-3" style="background:linear-gradient(135deg,${eligible ? '#ecfdf5 0%,#fefce8' : '#f8fafc 0%,#f1f5f9'} 100%);border-left:4px solid ${eligible ? '#06A05A' : '#94a3b8'}">
+      <div style="display:grid;grid-template-columns:1fr auto;gap:1.2rem;align-items:center">
+        <div>
+          <div style="font-size:.8rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Cumul disponible</div>
+          <div style="font-size:2.6rem;font-weight:700;color:${eligible ? '#06A05A' : '#64748b'};line-height:1">${fmtEUR(cumul.total_disponible || 0)}</div>
+          <div style="margin-top:.6rem;font-size:.88rem;color:#475569">
+            ${cumul.nb_periodes || 0} période(s) de commissions non encore demandée(s).
+            ${eligible
+              ? '<br><strong style="color:#06A05A"><i class="fas fa-check-circle"></i> Vous pouvez demander un paiement</strong>'
+              : `<br><span style="color:#dc2626"><i class="fas fa-info-circle"></i> Seuil minimum non atteint (${fmtEUR(seuilMin)})</span>`
+            }
+          </div>
+        </div>
+        <button id="btnDemander" class="btn btn-primary btn-lg" ${eligible ? '' : 'disabled'}>
+          <i class="fas fa-paper-plane"></i> Demander le paiement
+        </button>
+      </div>
+
+      <!-- Breakdown -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;margin-top:1rem">
+        <div style="background:white;border-radius:6px;padding:.6rem;border:1px solid #e2e8f0">
+          <div style="font-size:.72rem;color:#64748b;text-transform:uppercase">Commissions propres</div>
+          <div style="font-size:1.1rem;font-weight:600">${fmtEUR(cumul.total_propre || 0)}</div>
+        </div>
+        <div style="background:white;border-radius:6px;padding:.6rem;border:1px solid #fde68a">
+          <div style="font-size:.72rem;color:#b45309;text-transform:uppercase">Portefeuille 100%</div>
+          <div style="font-size:1.1rem;font-weight:600">${fmtEUR(cumul.total_portefeuille || 0)}</div>
+        </div>
+        <div style="background:white;border-radius:6px;padding:.6rem;border:1px solid #c7d2fe">
+          <div style="font-size:.72rem;color:#4338ca;text-transform:uppercase">N+1 (filleuls)</div>
+          <div style="font-size:1.1rem;font-weight:600">${fmtEUR(cumul.total_n1 || 0)}</div>
+        </div>
+        <div style="background:white;border-radius:6px;padding:.6rem;border:1px solid #fbcfe8">
+          <div style="font-size:.72rem;color:#9d174d;text-transform:uppercase">N+2 (sous-filleuls)</div>
+          <div style="font-size:1.1rem;font-weight:600">${fmtEUR(cumul.total_n2 || 0)}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Détail périodes incluses -->
+    ${(cumul.commissions || []).length > 0 ? `
+    <div class="card mb-3">
+      <div class="card-title"><i class="fas fa-list-ul"></i> Périodes incluses dans le prochain paiement (${cumul.commissions.length})</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>Période</th>
+          <th class="text-right">Propre</th>
+          <th class="text-right">Portefeuille</th>
+          <th class="text-right">N+1</th>
+          <th class="text-right">N+2</th>
+          <th class="text-right"><strong>Total</strong></th>
+        </tr></thead>
+        <tbody>${cumul.commissions.map(cc => `<tr>
+          <td><strong>${monthsFR[cc.periode_mois-1]} ${cc.periode_annee}</strong></td>
+          <td class="text-right">${fmtEUR(cc.commission_propre || 0)}</td>
+          <td class="text-right" style="color:#b45309">${fmtEUR(cc.commission_portefeuille || 0)}</td>
+          <td class="text-right" style="color:#4338ca">${fmtEUR(cc.commission_n1 || 0)}</td>
+          <td class="text-right" style="color:#9d174d">${fmtEUR(cc.commission_n2 || 0)}</td>
+          <td class="text-right"><strong>${fmtEUR(cc.total || 0)}</strong></td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>
+    ` : ''}
+
+    <!-- Historique des demandes -->
+    <div class="card">
+      <div class="card-title"><i class="fas fa-history"></i> Historique de mes demandes (${demandes.length})</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>Date demande</th>
+          <th class="text-right">Montant</th>
+          <th>Statut</th>
+          <th>Traitée le</th>
+          <th>Méthode</th>
+          <th>Référence</th>
+          <th class="text-right">Actions</th>
+        </tr></thead>
+        <tbody>${demandes.length ? demandes.map(d => `<tr>
+          <td>${fmtDateTime(d.date_demande)}</td>
+          <td class="text-right"><strong>${fmtEUR(d.montant_demande)}</strong></td>
+          <td>${demandeStatutBadge(d.statut)}</td>
+          <td>${d.date_traitement ? fmtDateTime(d.date_traitement) : '<span class="text-muted">—</span>'}</td>
+          <td>${escapeHtml(d.methode_paiement || '-')}</td>
+          <td>${escapeHtml(d.reference_paiement || '-')}</td>
+          <td class="text-right">
+            ${d.statut === 'en_attente' ? `<button class="btn btn-sm btn-danger" data-cancel="${d.id}" title="Annuler"><i class="fas fa-times"></i></button>` : ''}
+            ${d.motif_rejet ? `<button class="btn btn-sm btn-secondary" data-motif="${escapeHtml(d.motif_rejet)}" title="Voir motif"><i class="fas fa-info-circle"></i></button>` : ''}
+          </td>
+        </tr>`).join('') : '<tr><td colspan="7" class="text-center text-muted">Aucune demande pour le moment</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `
+
+  const btn = document.getElementById('btnDemander')
+  if (btn && eligible) {
+    btn.onclick = async () => {
+      const m = modal('<i class="fas fa-paper-plane"></i> Confirmer ma demande de paiement', `
+        <p>Vous demandez le paiement de <strong style="font-size:1.2rem;color:#06A05A">${fmtEUR(cumul.total_disponible)}</strong> correspondant à ${cumul.nb_periodes} période(s) de commissions.</p>
+        <div style="background:#fef3c7;padding:.7rem;border-radius:6px;font-size:.85rem;margin:.6rem 0">
+          <i class="fas fa-info-circle" style="color:#b45309"></i>
+          Une fois validée par DropEat, vous recevrez le paiement par virement sur votre IBAN. Toutes les commissions incluses seront marquées "payées" et ne pourront plus être redemandées.
+        </div>
+        <div class="form-group">
+          <label>Notes (optionnel)</label>
+          <textarea id="dpNotes" rows="2" placeholder="Ex: paiement avant le 30/06, RIB modifié, etc."></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+          <button type="button" class="btn btn-primary" id="dpConfirm"><i class="fas fa-check"></i> Confirmer la demande</button>
+        </div>
+      `)
+      m.el.querySelector('[data-close]').onclick = () => m.close()
+      m.el.querySelector('#dpConfirm').onclick = async () => {
+        const notes = m.el.querySelector('#dpNotes').value.trim()
+        try {
+          const { data } = await api.post('/demandes-paiement', { notes })
+          toast(`Demande #${data.demande_id} créée pour ${fmtEUR(data.montant)}`, 'success')
+          m.close()
+          navigate('a-demandes-paiement')
+        } catch (err) {
+          toast(err.response?.data?.error || 'Erreur création demande', 'error')
+        }
+      }
+    }
+  }
+
+  c.querySelectorAll('[data-cancel]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Annuler cette demande de paiement ? Les commissions redeviendront disponibles.')) return
+      try {
+        await api.delete('/demandes-paiement/' + b.dataset.cancel)
+        toast('Demande annulée')
+        navigate('a-demandes-paiement')
+      } catch (err) {
+        toast(err.response?.data?.error || 'Erreur', 'error')
+      }
+    }
+  })
+  c.querySelectorAll('[data-motif]').forEach(b => {
+    b.onclick = () => alert('Motif de rejet :\n\n' + b.dataset.motif)
+  })
+}
+
+function demandeStatutBadge(s) {
+  const map = {
+    en_attente: '<span class="badge badge-accent">En attente</span>',
+    validee: '<span class="badge badge-info">Validée</span>',
+    payee: '<span class="badge" style="background:#06A05A;color:white">Payée ✓</span>',
+    rejetee: '<span class="badge badge-danger">Rejetée</span>',
+    annulee: '<span class="badge" style="background:#9ca3af;color:white">Annulée</span>'
+  }
+  return map[s] || s
+}
+
+// ============================================================
+// === DEMANDES DE PAIEMENT (admin) ===========================
+// ============================================================
+PAGES['admin-demandes-paiement'] = async (c) => {
+  const statutFilter = c.dataset?.statutFilter || ''
+  const url = '/demandes-paiement/admin/all' + (statutFilter ? '?statut=' + statutFilter : '')
+  const { data } = await api.get(url)
+  const demandes = data.demandes || []
+  const stats = data.stats || {}
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-hand-holding-dollar"></i> Demandes de paiement</h1>
+        <div class="subtitle">Demandes des agents — validation et paiement</div>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <select id="filtStatut" class="form-control" style="width:auto">
+          <option value="">Tous statuts</option>
+          <option value="en_attente" ${statutFilter==='en_attente'?'selected':''}>En attente</option>
+          <option value="payee" ${statutFilter==='payee'?'selected':''}>Payées</option>
+          <option value="rejetee" ${statutFilter==='rejetee'?'selected':''}>Rejetées</option>
+          <option value="annulee" ${statutFilter==='annulee'?'selected':''}>Annulées</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card accent"><div class="stat-label">En attente</div><div class="stat-value">${stats.nb_en_attente || 0}</div><div class="stat-extra">${fmtEUR(stats.montant_en_attente || 0)}</div></div>
+      <div class="stat-card primary"><div class="stat-label">Payées</div><div class="stat-value">${stats.nb_payees || 0}</div><div class="stat-extra">${fmtEUR(stats.montant_paye || 0)}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-list"></i> ${demandes.length} demande(s)</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>Date</th>
+          <th>Agent</th>
+          <th>Niveau</th>
+          <th class="text-right">Montant</th>
+          <th class="text-right">Propre</th>
+          <th class="text-right">Portefeuille</th>
+          <th class="text-right">N+1</th>
+          <th class="text-right">N+2</th>
+          <th>Statut</th>
+          <th class="text-right">Actions</th>
+        </tr></thead>
+        <tbody>${demandes.length ? demandes.map(d => `<tr>
+          <td><small>${fmtDateTime(d.date_demande)}</small></td>
+          <td>
+            <strong>${escapeHtml(d.agent_prenom + ' ' + d.agent_nom)}</strong>
+            <br><small class="text-muted">${escapeHtml(d.agent_email)}</small>
+          </td>
+          <td>${niveauPill(d.agent_niveau)}</td>
+          <td class="text-right"><strong>${fmtEUR(d.montant_demande)}</strong></td>
+          <td class="text-right">${fmtEUR(d.montant_propre || 0)}</td>
+          <td class="text-right" style="color:#b45309">${fmtEUR(d.montant_portefeuille || 0)}</td>
+          <td class="text-right" style="color:#4338ca">${fmtEUR(d.montant_n1 || 0)}</td>
+          <td class="text-right" style="color:#9d174d">${fmtEUR(d.montant_n2 || 0)}</td>
+          <td>${demandeStatutBadge(d.statut)}</td>
+          <td class="text-right" style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary" data-view="${d.id}" title="Voir détail"><i class="fas fa-eye"></i></button>
+            ${d.statut === 'en_attente' ? `
+              <button class="btn btn-sm btn-primary" data-valider="${d.id}" title="Valider et payer"><i class="fas fa-check"></i></button>
+              <button class="btn btn-sm btn-danger" data-rejeter="${d.id}" title="Rejeter"><i class="fas fa-times"></i></button>
+            ` : ''}
+          </td>
+        </tr>`).join('') : '<tr><td colspan="10" class="text-center text-muted">Aucune demande</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `
+
+  document.getElementById('filtStatut').onchange = (e) => {
+    c.dataset.statutFilter = e.target.value
+    PAGES['admin-demandes-paiement'](c)
+  }
+
+  c.querySelectorAll('[data-view]').forEach(b => {
+    b.onclick = () => adminDemandePaiementDetailModal(b.dataset.view)
+  })
+  c.querySelectorAll('[data-valider]').forEach(b => {
+    b.onclick = () => adminValiderDemandeModal(b.dataset.valider)
+  })
+  c.querySelectorAll('[data-rejeter]').forEach(b => {
+    b.onclick = () => adminRejeterDemandeModal(b.dataset.rejeter)
+  })
+}
+
+async function adminDemandePaiementDetailModal(id) {
+  const { data } = await api.get('/demandes-paiement/admin/' + id)
+  const d = data.demande
+  const commissions = data.commissions || []
+  const html = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+      <div>
+        <strong>Agent :</strong> ${escapeHtml(d.agent_prenom + ' ' + d.agent_nom)}<br>
+        <small>${escapeHtml(d.agent_email)} · ${niveauLabel(d.agent_niveau)}</small><br>
+        <small><strong>IBAN :</strong> ${escapeHtml(d.agent_iban || '— non renseigné —')}</small>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:2rem;font-weight:700;color:#06A05A">${fmtEUR(d.montant_demande)}</div>
+        ${demandeStatutBadge(d.statut)}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-bottom:1rem">
+      <div style="background:#f8fafc;padding:.5rem;border-radius:6px"><small>Propre</small><br><strong>${fmtEUR(d.montant_propre || 0)}</strong></div>
+      <div style="background:#fef3c7;padding:.5rem;border-radius:6px"><small>Portefeuille</small><br><strong>${fmtEUR(d.montant_portefeuille || 0)}</strong></div>
+      <div style="background:#e0e7ff;padding:.5rem;border-radius:6px"><small>N+1</small><br><strong>${fmtEUR(d.montant_n1 || 0)}</strong></div>
+      <div style="background:#fce7f3;padding:.5rem;border-radius:6px"><small>N+2</small><br><strong>${fmtEUR(d.montant_n2 || 0)}</strong></div>
+    </div>
+    ${d.notes_agent ? `<div style="background:#f1f5f9;padding:.6rem;border-radius:6px;margin-bottom:1rem"><strong>Notes agent :</strong> ${escapeHtml(d.notes_agent)}</div>` : ''}
+    ${d.notes_admin ? `<div style="background:#ecfeff;padding:.6rem;border-radius:6px;margin-bottom:1rem"><strong>Notes admin :</strong> ${escapeHtml(d.notes_admin)}</div>` : ''}
+    ${d.motif_rejet ? `<div style="background:#fee2e2;padding:.6rem;border-radius:6px;margin-bottom:1rem"><strong>Motif rejet :</strong> ${escapeHtml(d.motif_rejet)}</div>` : ''}
+    <h4 style="margin:1rem 0 .5rem">Commissions incluses (${commissions.length})</h4>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Période</th><th class="text-right">Propre</th><th class="text-right">Portef.</th><th class="text-right">N+1</th><th class="text-right">N+2</th><th class="text-right">Total</th></tr></thead>
+      <tbody>${commissions.map(cc => `<tr>
+        <td>${monthsFR[cc.periode_mois-1]} ${cc.periode_annee}</td>
+        <td class="text-right">${fmtEUR(cc.commission_propre || 0)}</td>
+        <td class="text-right">${fmtEUR(cc.commission_portefeuille || 0)}</td>
+        <td class="text-right">${fmtEUR(cc.commission_n1 || 0)}</td>
+        <td class="text-right">${fmtEUR(cc.commission_n2 || 0)}</td>
+        <td class="text-right"><strong>${fmtEUR(cc.total || 0)}</strong></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  `
+  const m = modal('<i class="fas fa-file-invoice"></i> Demande #' + d.id, html + `
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Fermer</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+}
+
+function adminValiderDemandeModal(id) {
+  const m = modal('<i class="fas fa-check"></i> Valider la demande #' + id, `
+    <p>Confirmez la validation : un paiement sera créé, les commissions seront marquées "payées" et le cumul de l'agent repartira à 0.</p>
+    <div class="form-grid">
+      <div class="form-group"><label>Méthode</label>
+        <select id="vmeth"><option value="virement">Virement</option><option value="especes">Espèces</option><option value="autre">Autre</option></select>
+      </div>
+      <div class="form-group"><label>Date paiement</label><input id="vdate" type="date" value="${new Date().toISOString().substring(0,10)}" /></div>
+      <div class="form-group"><label>Référence (virement)</label><input id="vref" placeholder="Ex: VIR-2026-0042" /></div>
+      <div class="form-group"><label>Notes admin</label><input id="vnotes" /></div>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+      <button type="button" class="btn btn-primary" id="vok"><i class="fas fa-check"></i> Valider & marquer payée</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelector('#vok').onclick = async () => {
+    try {
+      await api.post('/demandes-paiement/admin/' + id + '/valider', {
+        methode: m.el.querySelector('#vmeth').value,
+        date_paiement: m.el.querySelector('#vdate').value,
+        reference: m.el.querySelector('#vref').value.trim() || null,
+        notes: m.el.querySelector('#vnotes').value.trim() || null
+      })
+      toast('Demande validée et payée')
+      m.close()
+      navigate('admin-demandes-paiement')
+    } catch (err) {
+      toast(err.response?.data?.error || 'Erreur validation', 'error')
+    }
+  }
+}
+
+function adminRejeterDemandeModal(id) {
+  const m = modal('<i class="fas fa-times"></i> Rejeter la demande #' + id, `
+    <p>Le rejet libérera les commissions liées (elles redeviendront "disponibles" pour une future demande).</p>
+    <div class="form-group">
+      <label>Motif de rejet <span class="req">*</span></label>
+      <textarea id="rmotif" rows="3" required placeholder="Ex: IBAN manquant dans le profil, période incomplète, etc."></textarea>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+      <button type="button" class="btn btn-danger" id="rok"><i class="fas fa-times"></i> Rejeter</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelector('#rok').onclick = async () => {
+    const motif = m.el.querySelector('#rmotif').value.trim()
+    if (!motif) { toast('Motif obligatoire', 'error'); return }
+    try {
+      await api.post('/demandes-paiement/admin/' + id + '/rejeter', { motif })
+      toast('Demande rejetée — commissions libérées')
+      m.close()
+      navigate('admin-demandes-paiement')
+    } catch (err) {
+      toast(err.response?.data?.error || 'Erreur', 'error')
+    }
+  }
+}
+
 // --- Sous-agents ---
 PAGES['a-sous-agents'] = async (c) => {
   const [sa, inv] = await Promise.all([
@@ -5855,7 +6240,11 @@ async function factureViewerModal(id) {
           <div><strong>Date d'émission :</strong> ${fmtDate(f.date_emission)}</div>
           <div><strong>Date d'échéance :</strong> ${fmtDate(f.date_echeance)}</div>
           <div><strong>Période :</strong> ${monthsFR[f.periode_mois-1]} ${f.periode_annee}</div>
-          <div><strong>Type :</strong> ${f.type === 'agent_to_dropeat' ? 'Commissions agent commercial' : 'Service DropEat → Restaurant'}</div>
+          <div><strong>Type :</strong> ${
+            f.type === 'agent_to_dropeat' ? 'Commissions agent commercial'
+            : f.type === 'agent_to_resto' ? 'Facturation directe — Portefeuille Propriétaire 100%'
+            : 'Service DropEat → Restaurant'
+          }</div>
         </div>
       </div>
       <table class="invoice-table">

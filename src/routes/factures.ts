@@ -503,7 +503,11 @@ app.post('/agent-resto/create', async (c) => {
     telephone: resto.telephone
   })
 
-  const prefixe = `AGR-${periode.annee}-${String(periode.mois).padStart(2, '0')}`
+  // ⚠️ NUMÉROTATION RÉGLEMENTAIRE (art. 242 nonies A CGI) :
+  // Chaque agent émet ses factures Portefeuille sous SA propre identité fiscale.
+  // → Séquence isolée par agent (PA-{agent_id}-{annee}-NNNN), sans trou, continue.
+  // Format : PA-12-2026-0001 (Portefeuille Agent #12, 2026, facture n°1)
+  const prefixe = `PA-${user.id}-${periode.annee}`
   const numero = await getNextFactureNumero(c.env.DB, prefixe, 4)
 
   const taux = profil.taux_tva || 0
