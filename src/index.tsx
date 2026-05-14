@@ -29,6 +29,7 @@ import factures from './routes/factures'
 import adminAgentsCrud from './routes/admin-agents-crud'
 import adminMarques from './routes/admin-marques'
 import demandesPaiement from './routes/demandes-paiement'
+import challenges from './routes/challenges'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -78,6 +79,9 @@ app.route('/api/agent', agent)
 
 // Demandes de paiement (seuil 20€, tous niveaux MLM)
 app.route('/api/demandes-paiement', demandesPaiement)
+
+// Challenges commerciaux (CRUD superadmin + participation agent)
+app.route('/api/challenges', challenges)
 
 // Health
 app.get('/api/health', (c) => c.json({ ok: true, time: new Date().toISOString() }))

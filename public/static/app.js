@@ -283,6 +283,7 @@ const ADMIN_NAV = [
   { id: 'paiements', label: 'Paiements', icon: 'fa-money-check-dollar' },
   { id: 'admin-demandes-paiement', label: 'Demandes de paiement', icon: 'fa-hand-holding-dollar' },
   { id: 'attributions', label: 'Demandes 5e marque', icon: 'fa-trophy' },
+  { id: 'admin-challenges', label: 'Challenges commerciaux', icon: 'fa-flag-checkered' },
   { section: 'FACTURATION' },
   { id: 'admin-factures', label: 'Factures reçues / émises', icon: 'fa-file-invoice-dollar' },
   { id: 'admin-factures-resto', label: 'Facturer un restaurant', icon: 'fa-file-export' },
@@ -316,6 +317,7 @@ const AGENT_NAV = [
   { section: 'PORTEFEUILLE' },
   { id: 'a-paliers', label: 'Grille des paliers', icon: 'fa-layer-group' },
   { id: 'a-attribution', label: 'Choisir ma 5e marque', icon: 'fa-trophy' },
+  { id: 'a-challenges', label: 'Challenges', icon: 'fa-flag-checkered' },
   { section: 'AIDE' },
   { id: 'a-tutoriel', label: 'Tutoriel', icon: 'fa-graduation-cap' },
   { id: 'a-profil', label: 'Mon profil', icon: 'fa-user' }
@@ -5563,6 +5565,508 @@ function adminRejeterDemandeModal(id) {
   }
 }
 
+// ============================================================
+// === CHALLENGES (admin + agent) =============================
+// ============================================================
+function challengeStatutBadge(s) {
+  const map = {
+    en_cours: { bg: '#3b82f6', label: 'EN COURS' },
+    reussi: { bg: '#10b981', label: 'RÉUSSI' },
+    recompense_attribuee: { bg: '#059669', label: 'RÉCOMPENSÉ' },
+    echoue: { bg: '#ef4444', label: 'ÉCHOUÉ' },
+    annule: { bg: '#9ca3af', label: 'ANNULÉ' }
+  }
+  const m = map[s] || { bg: '#6b7280', label: (s || '').toUpperCase() }
+  return `<span style="background:${m.bg};color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem;font-weight:600">${m.label}</span>`
+}
+function challengeTypeObjectifLabel(t) {
+  return ({ restaurants: 'Restaurants', marques: 'Marques', restaurants_ou_marques: 'Restos + Marques' })[t] || t
+}
+function challengeTypeRecompenseLabel(t) {
+  return ({
+    portefeuille_restaurants: 'Restaurants en portefeuille 100%',
+    portefeuille_marques: 'Marques en portefeuille 100%',
+    bonus_montant: 'Bonus financier (€)',
+    autre: 'Autre'
+  })[t] || t
+}
+
+// --- ADMIN : liste + CRUD ---
+PAGES['admin-challenges'] = async (c) => {
+  const { data } = await api.get('/challenges/admin')
+  const challenges = data.challenges || []
+  const today = new Date().toISOString().slice(0, 10)
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-flag-checkered"></i> Challenges commerciaux</h1>
+        <div class="subtitle">Défis temporaires avec récompense (ex: 30 restos → 15 en portefeuille 100%)</div>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-secondary" id="syncAll" title="Recalculer toutes les progressions"><i class="fas fa-sync"></i> Synchroniser</button>
+        <button class="btn btn-primary" id="newChal"><i class="fas fa-plus"></i> Nouveau challenge</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-list"></i> ${challenges.length} challenge(s)</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>Code</th><th>Nom</th><th>Période</th><th>Objectif</th>
+          <th class="text-right">Participants</th>
+          <th class="text-right">Réussis</th>
+          <th class="text-right">Récompensés</th>
+          <th>Suspend 5/5</th>
+          <th>Statut</th>
+          <th class="text-right">Actions</th>
+        </tr></thead>
+        <tbody>${challenges.length ? challenges.map(ch => {
+          const enPeriode = ch.date_debut <= today && today <= ch.date_fin
+          const aVenir = today < ch.date_debut
+          const termine = today > ch.date_fin
+          const statut = !ch.actif ? '<span style="background:#9ca3af;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">ARCHIVÉ</span>'
+            : aVenir ? '<span style="background:#6b7280;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">À VENIR</span>'
+            : enPeriode ? '<span style="background:#10b981;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">ACTIF</span>'
+            : '<span style="background:#f59e0b;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">TERMINÉ</span>'
+          return `<tr>
+            <td><strong style="font-family:monospace">${escapeHtml(ch.code)}</strong></td>
+            <td>
+              <strong>${escapeHtml(ch.nom)}</strong>
+              ${ch.description ? `<br><small class="text-muted">${escapeHtml(ch.description.substring(0, 80))}${ch.description.length > 80 ? '…' : ''}</small>` : ''}
+            </td>
+            <td><small>${fmtDate(ch.date_debut)}<br>→ ${fmtDate(ch.date_fin)}</small></td>
+            <td>
+              <strong>${ch.objectif_quantite}</strong> ${challengeTypeObjectifLabel(ch.type_objectif)}
+              <br><small class="text-muted">→ ${ch.recompense_quantite || ch.recompense_montant + '€'} ${challengeTypeRecompenseLabel(ch.type_recompense)}</small>
+            </td>
+            <td class="text-right">${ch.nb_participants || 0}</td>
+            <td class="text-right" style="color:#10b981"><strong>${ch.nb_reussis || 0}</strong></td>
+            <td class="text-right" style="color:#059669"><strong>${ch.nb_recompenses || 0}</strong></td>
+            <td>${ch.suspend_tranche_standard ? '<i class="fas fa-check" style="color:#10b981"></i>' : '—'}</td>
+            <td>${statut}</td>
+            <td class="text-right" style="white-space:nowrap">
+              <button class="btn btn-sm btn-secondary" data-view="${ch.id}" title="Détail"><i class="fas fa-eye"></i></button>
+              <button class="btn btn-sm btn-primary" data-edit="${ch.id}" title="Modifier"><i class="fas fa-pen"></i></button>
+              <button class="btn btn-sm btn-danger" data-del="${ch.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+            </td>
+          </tr>`
+        }).join('') : '<tr><td colspan="10" class="text-center text-muted">Aucun challenge — cliquez sur "Nouveau challenge"</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `
+  document.getElementById('newChal').onclick = () => adminChallengeFormModal()
+  document.getElementById('syncAll').onclick = async () => {
+    try {
+      const { data } = await api.post('/challenges/admin/synchroniser')
+      toast(`${data.nb_synchronises} participation(s) recalculée(s)`)
+      navigate('admin-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
+  c.querySelectorAll('[data-view]').forEach(b => b.onclick = () => adminChallengeDetailModal(b.dataset.view))
+  c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => adminChallengeFormModal(b.dataset.edit))
+  c.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Supprimer définitivement ce challenge ? Toutes les participations seront perdues.')) return
+    try {
+      await api.delete('/challenges/admin/' + b.dataset.del)
+      toast('Challenge supprimé')
+      navigate('admin-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+}
+
+async function adminChallengeFormModal(id) {
+  let ch = {
+    code: '', nom: '', description: '',
+    date_debut: '', date_fin: '',
+    type_objectif: 'restaurants', objectif_quantite: 30,
+    type_recompense: 'portefeuille_restaurants', recompense_quantite: 15,
+    recompense_montant: null, recompense_description: '',
+    suspend_tranche_standard: 1, cible: 'tous',
+    actif: 1, notes_internes: ''
+  }
+  if (id) {
+    const { data } = await api.get('/challenges/admin/' + id)
+    ch = data.challenge
+  }
+  // Pour cible="selection" : charger la liste des agents
+  let agentsHtml = ''
+  if (!id) {
+    try {
+      const { data } = await api.get('/admin/users')
+      const agents = (data.users || []).filter(u => u.role === 'agent' && u.actif)
+      agentsHtml = `<div class="form-group" id="grpSel" style="display:none">
+        <label>Participants (sélection)</label>
+        <select id="chSel" multiple size="6" style="width:100%">
+          ${agents.map(a => `<option value="${a.id}">${escapeHtml(a.prenom + ' ' + a.nom)} — ${escapeHtml(a.email)}</option>`).join('')}
+        </select>
+        <small class="text-muted">Maintenez Ctrl/Cmd pour sélectionner plusieurs agents</small>
+      </div>`
+    } catch {}
+  }
+
+  const m = modal((id ? '<i class="fas fa-pen"></i> Modifier' : '<i class="fas fa-plus"></i> Nouveau') + ' challenge', `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+      <div class="form-group">
+        <label>Code <span class="req">*</span></label>
+        <input id="chCode" required placeholder="Ex: CH-2026-30R-SEBASTIAN" value="${escapeHtml(ch.code)}" ${id?'readonly':''}>
+        <small class="text-muted">Identifiant unique, non modifiable après création</small>
+      </div>
+      <div class="form-group">
+        <label>Nom <span class="req">*</span></label>
+        <input id="chNom" required placeholder="Ex: Challenge été 2026 — 30 restos = 15 portefeuille" value="${escapeHtml(ch.nom)}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <textarea id="chDesc" rows="2" placeholder="Détail des règles, conditions, motivations…">${escapeHtml(ch.description || '')}</textarea>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+      <div class="form-group">
+        <label>Date début <span class="req">*</span></label>
+        <input type="date" id="chDeb" required value="${ch.date_debut || ''}">
+      </div>
+      <div class="form-group">
+        <label>Date fin <span class="req">*</span></label>
+        <input type="date" id="chFin" required value="${ch.date_fin || ''}">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+      <div class="form-group">
+        <label>Type d'objectif <span class="req">*</span></label>
+        <select id="chTO">
+          <option value="restaurants" ${ch.type_objectif==='restaurants'?'selected':''}>Restaurants apportés</option>
+          <option value="marques" ${ch.type_objectif==='marques'?'selected':''}>Marques créées</option>
+          <option value="restaurants_ou_marques" ${ch.type_objectif==='restaurants_ou_marques'?'selected':''}>Restaurants + Marques</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Quantité objectif <span class="req">*</span></label>
+        <input type="number" id="chOQ" min="1" required value="${ch.objectif_quantite}">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+      <div class="form-group">
+        <label>Type de récompense <span class="req">*</span></label>
+        <select id="chTR">
+          <option value="portefeuille_restaurants" ${ch.type_recompense==='portefeuille_restaurants'?'selected':''}>Restaurants en portefeuille 100%</option>
+          <option value="portefeuille_marques" ${ch.type_recompense==='portefeuille_marques'?'selected':''}>Marques en portefeuille 100%</option>
+          <option value="bonus_montant" ${ch.type_recompense==='bonus_montant'?'selected':''}>Bonus financier (€)</option>
+          <option value="autre" ${ch.type_recompense==='autre'?'selected':''}>Autre (texte libre)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Quantité / Montant</label>
+        <input type="number" id="chRQ" min="0" step="0.01" value="${ch.recompense_quantite || ch.recompense_montant || 15}">
+        <small class="text-muted">Nombre d'éléments à attribuer OU montant en €</small>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Description récompense (si "Autre")</label>
+      <input id="chRD" placeholder="Ex: Voyage, formation, équipement…" value="${escapeHtml(ch.recompense_description || '')}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="chSus" ${ch.suspend_tranche_standard?'checked':''}>
+          Suspendre la règle 5/5 pour les participants
+        </label>
+        <small class="text-muted">Pendant la période du challenge, les participants ne déclenchent pas la règle standard de la 5e marque/resto</small>
+      </div>
+      <div class="form-group">
+        <label>Cible <span class="req">*</span></label>
+        <select id="chCible">
+          <option value="tous" ${ch.cible==='tous'?'selected':''}>Tous les agents actifs (auto-inscription)</option>
+          <option value="selection" ${ch.cible==='selection'?'selected':''}>Sélection manuelle</option>
+        </select>
+      </div>
+    </div>
+    ${agentsHtml}
+    <div class="form-group">
+      <label>Notes internes (superadmin)</label>
+      <textarea id="chNot" rows="2">${escapeHtml(ch.notes_internes || '')}</textarea>
+    </div>
+    ${id ? `<div class="form-group">
+      <label><input type="checkbox" id="chAct" ${ch.actif?'checked':''}> Actif (visible)</label>
+    </div>` : ''}
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+      <button type="button" class="btn btn-primary" id="chOk"><i class="fas fa-check"></i> ${id ? 'Mettre à jour' : 'Créer'}</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  const cibleSel = m.el.querySelector('#chCible')
+  const grpSel = m.el.querySelector('#grpSel')
+  if (cibleSel && grpSel) {
+    const upd = () => grpSel.style.display = cibleSel.value === 'selection' ? '' : 'none'
+    cibleSel.onchange = upd; upd()
+  }
+  m.el.querySelector('#chOk').onclick = async () => {
+    const typeRecompense = m.el.querySelector('#chTR').value
+    const recQty = parseFloat(m.el.querySelector('#chRQ').value) || 0
+    const payload = {
+      code: m.el.querySelector('#chCode').value.trim(),
+      nom: m.el.querySelector('#chNom').value.trim(),
+      description: m.el.querySelector('#chDesc').value.trim() || null,
+      date_debut: m.el.querySelector('#chDeb').value,
+      date_fin: m.el.querySelector('#chFin').value,
+      type_objectif: m.el.querySelector('#chTO').value,
+      objectif_quantite: parseInt(m.el.querySelector('#chOQ').value),
+      type_recompense: typeRecompense,
+      recompense_quantite: typeRecompense === 'bonus_montant' ? null : Math.floor(recQty),
+      recompense_montant: typeRecompense === 'bonus_montant' ? recQty : null,
+      recompense_description: m.el.querySelector('#chRD').value.trim() || null,
+      suspend_tranche_standard: m.el.querySelector('#chSus').checked ? 1 : 0,
+      cible: m.el.querySelector('#chCible').value,
+      notes_internes: m.el.querySelector('#chNot').value.trim() || null
+    }
+    if (id) payload.actif = m.el.querySelector('#chAct').checked ? 1 : 0
+    if (!id && payload.cible === 'selection') {
+      const sel = m.el.querySelector('#chSel')
+      payload.participants_ids = sel ? Array.from(sel.selectedOptions).map(o => parseInt(o.value)) : []
+    }
+    try {
+      if (id) {
+        await api.put('/challenges/admin/' + id, payload)
+        toast('Challenge mis à jour')
+      } else {
+        const { data } = await api.post('/challenges/admin', payload)
+        toast(`Challenge créé — ${data.nb_inscrits} agent(s) inscrits`)
+      }
+      m.close()
+      navigate('admin-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
+}
+
+async function adminChallengeDetailModal(id) {
+  const { data } = await api.get('/challenges/admin/' + id)
+  const ch = data.challenge
+  const parts = data.participations || []
+  const m = modal('<i class="fas fa-flag-checkered"></i> ' + escapeHtml(ch.nom) + ' — <code>' + escapeHtml(ch.code) + '</code>', `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.8rem;margin-bottom:1rem">
+      <div class="stat-card primary"><div class="stat-label">Période</div><div class="stat-value" style="font-size:.95rem">${fmtDate(ch.date_debut)} → ${fmtDate(ch.date_fin)}</div></div>
+      <div class="stat-card accent"><div class="stat-label">Objectif</div><div class="stat-value">${ch.objectif_quantite}</div><div class="stat-extra">${challengeTypeObjectifLabel(ch.type_objectif)}</div></div>
+      <div class="stat-card success"><div class="stat-label">Récompense</div><div class="stat-value">${ch.recompense_quantite || ch.recompense_montant + '€'}</div><div class="stat-extra">${challengeTypeRecompenseLabel(ch.type_recompense)}</div></div>
+    </div>
+    ${ch.description ? `<div class="card" style="background:#f9fafb;margin-bottom:.8rem"><small>${escapeHtml(ch.description)}</small></div>` : ''}
+    ${ch.suspend_tranche_standard ? `<div class="card" style="background:#fef3c7;border-left:3px solid #f59e0b;margin-bottom:.8rem"><small><i class="fas fa-exclamation-triangle"></i> <strong>Règle 5/5 suspendue</strong> pour les participants pendant la période.</small></div>` : ''}
+    <h3 style="margin:.6rem 0 .4rem">Participants (${parts.length})</h3>
+    <div class="table-wrap" style="max-height:400px;overflow:auto"><table class="data-table">
+      <thead><tr>
+        <th>Agent</th>
+        <th class="text-right">Progression</th>
+        <th>Statut</th>
+        <th>Réussi le</th>
+        <th class="text-right">Actions</th>
+      </tr></thead>
+      <tbody>${parts.length ? parts.map(p => {
+        const pct = Math.min(100, Math.round((p.progression_actuelle / ch.objectif_quantite) * 100))
+        const color = pct >= 100 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#3b82f6'
+        return `<tr>
+          <td>
+            <strong>${escapeHtml((p.prenom || '') + ' ' + (p.nom || ''))}</strong>
+            <br><small class="text-muted">${escapeHtml(p.email || '')}</small>
+          </td>
+          <td class="text-right">
+            <strong>${p.progression_actuelle} / ${ch.objectif_quantite}</strong>
+            <div style="background:#e5e7eb;border-radius:99px;height:6px;margin-top:.3rem;overflow:hidden">
+              <div style="background:${color};height:100%;width:${pct}%"></div>
+            </div>
+          </td>
+          <td>${challengeStatutBadge(p.statut)}</td>
+          <td><small>${p.date_reussite ? fmtDateTime(p.date_reussite) : '—'}</small></td>
+          <td class="text-right" style="white-space:nowrap">
+            ${p.statut === 'reussi' ? `<button class="btn btn-sm btn-success" data-rec="${p.id}" title="Attribuer la récompense"><i class="fas fa-gift"></i> Récompenser</button>` : ''}
+            ${p.statut === 'recompense_attribuee' ? '<span style="color:#059669"><i class="fas fa-check-double"></i></span>' : ''}
+            <button class="btn btn-sm btn-danger" data-del-p="${p.id}" title="Retirer"><i class="fas fa-times"></i></button>
+          </td>
+        </tr>`
+      }).join('') : '<tr><td colspan="5" class="text-center text-muted">Aucun participant</td></tr>'}</tbody>
+    </table></div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Fermer</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelectorAll('[data-rec]').forEach(b => b.onclick = async () => {
+    const notes = prompt('Notes facultatives (ex: "15 premiers restos auto-attribués") :') || ''
+    if (notes === null) return
+    try {
+      const { data } = await api.post('/challenges/admin/participations/' + b.dataset.rec + '/recompenser', { notes })
+      toast(`Récompense attribuée — ${data.nb_attribue} élément(s) marqué(s) en portefeuille`)
+      m.close()
+      adminChallengeDetailModal(id)
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+  m.el.querySelectorAll('[data-del-p]').forEach(b => b.onclick = async () => {
+    if (!confirm('Retirer ce participant ?')) return
+    try {
+      await api.delete('/challenges/admin/' + id + '/participations/' + b.dataset.delP)
+      toast('Participant retiré')
+      m.close()
+      adminChallengeDetailModal(id)
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+}
+
+// --- AGENT : mes challenges ---
+PAGES['a-challenges'] = async (c) => {
+  const { data } = await api.get('/challenges/mine')
+  const list = data.challenges || []
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-flag-checkered"></i> Mes challenges</h1>
+        <div class="subtitle">Défis en cours — apportez des restaurants/marques pour débloquer des récompenses</div>
+      </div>
+    </div>
+
+    ${list.length === 0 ? `
+      <div class="card" style="text-align:center;padding:2.5rem">
+        <i class="fas fa-flag-checkered" style="font-size:3rem;color:#cbd5e1;margin-bottom:1rem"></i>
+        <h3>Aucun challenge en cours</h3>
+        <p class="text-muted">Le superadmin n'a pas encore lancé de challenge auquel vous participez.</p>
+      </div>
+    ` : `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:1rem">
+        ${list.map(ch => {
+          const p = ch.participation
+          const prog = p ? p.progression_actuelle : 0
+          const pct = Math.min(100, Math.round((prog / ch.objectif_quantite) * 100))
+          const reste = Math.max(0, ch.objectif_quantite - prog)
+          const today = new Date().toISOString().slice(0,10)
+          const aVenir = today < ch.date_debut
+          const enCours = today >= ch.date_debut && today <= ch.date_fin
+          const finJ = Math.ceil((new Date(ch.date_fin) - new Date()) / (1000*60*60*24))
+          const couleur = pct >= 100 ? '#10b981' : pct >= 66 ? '#3b82f6' : pct >= 33 ? '#f59e0b' : '#6b7280'
+          return `<div class="card" style="border-left:4px solid ${couleur}">
+            <div style="display:flex;justify-content:space-between;align-items:start;gap:.5rem">
+              <div>
+                <div style="font-family:monospace;font-size:.75rem;color:#6b7280">${escapeHtml(ch.code)}</div>
+                <h3 style="margin:.3rem 0">${escapeHtml(ch.nom)}</h3>
+              </div>
+              ${p ? challengeStatutBadge(p.statut) : '<span style="background:#9ca3af;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">NON INSCRIT</span>'}
+            </div>
+            ${ch.description ? `<p style="color:#6b7280;font-size:.85rem;margin:.5rem 0">${escapeHtml(ch.description)}</p>` : ''}
+            <div style="background:#f9fafb;border-radius:6px;padding:.7rem;margin:.8rem 0">
+              <div style="display:flex;justify-content:space-between;margin-bottom:.3rem">
+                <strong>Progression</strong>
+                <strong style="color:${couleur}">${prog} / ${ch.objectif_quantite}</strong>
+              </div>
+              <div style="background:#e5e7eb;border-radius:99px;height:10px;overflow:hidden">
+                <div style="background:${couleur};height:100%;width:${pct}%;transition:width .3s"></div>
+              </div>
+              <div style="display:flex;justify-content:space-between;margin-top:.4rem;font-size:.78rem;color:#6b7280">
+                <span>${pct}%</span>
+                <span>${reste > 0 ? `Reste ${reste} à apporter` : 'Objectif atteint ✓'}</span>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;font-size:.82rem">
+              <div><i class="fas fa-calendar-alt"></i> <strong>Période</strong><br>${fmtDate(ch.date_debut)} → ${fmtDate(ch.date_fin)}</div>
+              <div>
+                <i class="fas fa-bullseye"></i> <strong>Objectif</strong><br>
+                ${ch.objectif_quantite} ${challengeTypeObjectifLabel(ch.type_objectif).toLowerCase()}
+              </div>
+              <div><i class="fas fa-gift"></i> <strong>Récompense</strong><br>${ch.recompense_quantite ? ch.recompense_quantite + ' ' : ''}${ch.recompense_montant ? fmtEUR(ch.recompense_montant) + ' ' : ''}${challengeTypeRecompenseLabel(ch.type_recompense)}</div>
+              <div>
+                <i class="fas fa-clock"></i> <strong>Statut période</strong><br>
+                ${aVenir ? '<span style="color:#6b7280">Démarre dans ' + Math.ceil((new Date(ch.date_debut) - new Date()) / (1000*60*60*24)) + ' j</span>'
+                  : enCours ? `<span style="color:#10b981"><strong>${finJ} j restant${finJ>1?'s':''}</strong></span>`
+                  : '<span style="color:#ef4444">Terminé</span>'}
+              </div>
+            </div>
+            ${ch.suspend_tranche_standard ? `<div style="background:#fef3c7;border-left:3px solid #f59e0b;padding:.5rem .7rem;margin-top:.6rem;font-size:.78rem;border-radius:4px">
+              <i class="fas fa-info-circle"></i> Pendant ce challenge, la règle standard 5/5 (5e marque/resto = portefeuille) est <strong>suspendue</strong>.
+            </div>` : ''}
+            ${p && p.statut === 'reussi' ? `<div style="background:#d1fae5;border:1px solid #10b981;padding:.6rem;margin-top:.6rem;border-radius:6px;text-align:center">
+              <i class="fas fa-trophy" style="color:#059669"></i> <strong>Objectif atteint le ${fmtDateTime(p.date_reussite)}</strong> — en attente d'attribution par le superadmin.
+            </div>` : ''}
+            ${p && p.statut === 'recompense_attribuee' ? `<div style="background:#d1fae5;border:1px solid #10b981;padding:.6rem;margin-top:.6rem;border-radius:6px;text-align:center">
+              <i class="fas fa-check-double" style="color:#059669"></i> <strong>Récompense attribuée</strong> ${p.recompense_notes ? '— ' + escapeHtml(p.recompense_notes) : ''}
+            </div>` : ''}
+            <div style="margin-top:.8rem;display:flex;gap:.4rem">
+              <button class="btn btn-sm btn-secondary" data-detail="${ch.id}"><i class="fas fa-eye"></i> Détail</button>
+              ${!p && ch.cible === 'tous' ? `<button class="btn btn-sm btn-primary" data-inscrire="${ch.id}"><i class="fas fa-flag"></i> Participer</button>` : ''}
+              ${p ? `<button class="btn btn-sm btn-secondary" data-sync="${ch.id}"><i class="fas fa-sync"></i> Recalculer</button>` : ''}
+            </div>
+          </div>`
+        }).join('')}
+      </div>
+    `}
+  `
+
+  c.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => agentChallengeDetailModal(b.dataset.detail))
+  c.querySelectorAll('[data-inscrire]').forEach(b => b.onclick = async () => {
+    try {
+      await api.post('/challenges/' + b.dataset.inscrire + '/participer')
+      toast('Inscription confirmée')
+      navigate('a-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+  c.querySelectorAll('[data-sync]').forEach(b => b.onclick = async () => {
+    try {
+      const { data } = await api.post('/challenges/' + b.dataset.sync + '/synchroniser')
+      toast(`Progression recalculée : ${data.progression}${data.objectif_atteint ? ' — Objectif atteint !' : ''}`)
+      navigate('a-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+}
+
+async function agentChallengeDetailModal(id) {
+  const { data } = await api.get('/challenges/mine/' + id)
+  const ch = data.challenge
+  const p = data.participation
+  const restos = data.restos || []
+  const marques = data.marques || []
+  const pct = p ? Math.min(100, Math.round((p.progression_actuelle / ch.objectif_quantite) * 100)) : 0
+
+  const m = modal('<i class="fas fa-flag-checkered"></i> ' + escapeHtml(ch.nom), `
+    <div class="card" style="background:#f9fafb;margin-bottom:.8rem">
+      <div style="font-family:monospace;font-size:.78rem;color:#6b7280">${escapeHtml(ch.code)}</div>
+      ${ch.description ? `<p style="margin:.4rem 0 0">${escapeHtml(ch.description)}</p>` : ''}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:1rem">
+      <div class="stat-card primary"><div class="stat-label">Période</div><div style="font-size:.85rem;margin-top:.3rem"><strong>${fmtDate(ch.date_debut)}</strong><br>→ ${fmtDate(ch.date_fin)}</div></div>
+      <div class="stat-card accent"><div class="stat-label">Objectif</div><div class="stat-value">${ch.objectif_quantite}</div><div class="stat-extra">${challengeTypeObjectifLabel(ch.type_objectif)}</div></div>
+      <div class="stat-card success"><div class="stat-label">Récompense</div><div class="stat-value">${ch.recompense_quantite || (ch.recompense_montant ? fmtEUR(ch.recompense_montant) : '—')}</div><div class="stat-extra">${challengeTypeRecompenseLabel(ch.type_recompense)}</div></div>
+    </div>
+    ${p ? `<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;margin-bottom:.4rem">
+        <strong>Ma progression</strong>
+        <strong>${p.progression_actuelle} / ${ch.objectif_quantite} (${pct}%)</strong>
+      </div>
+      <div style="background:#e5e7eb;border-radius:99px;height:12px;overflow:hidden">
+        <div style="background:${pct>=100?'#10b981':'#3b82f6'};height:100%;width:${pct}%"></div>
+      </div>
+      <div style="margin-top:.6rem">${challengeStatutBadge(p.statut)}</div>
+    </div>` : ''}
+    ${restos.length ? `<h3 style="margin:.6rem 0 .4rem">Restaurants comptabilisés (${restos.length})</h3>
+      <div class="table-wrap" style="max-height:200px;overflow:auto;margin-bottom:.8rem"><table class="data-table">
+        <thead><tr><th>Nom</th><th>Ville</th><th>Signature</th><th>Portefeuille ?</th></tr></thead>
+        <tbody>${restos.map(r => `<tr>
+          <td><strong>${escapeHtml(r.nom)}</strong></td>
+          <td>${escapeHtml(r.ville || '')}</td>
+          <td><small>${fmtDate(r.date_signature)}</small></td>
+          <td>${r.is_portefeuille_proprietaire ? '<i class="fas fa-star" style="color:#f59e0b"></i>' : '—'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>` : ''}
+    ${marques.length ? `<h3 style="margin:.6rem 0 .4rem">Marques comptabilisées (${marques.length})</h3>
+      <div class="table-wrap" style="max-height:200px;overflow:auto;margin-bottom:.8rem"><table class="data-table">
+        <thead><tr><th>Marque</th><th>Restaurant</th><th>Création</th><th>Portefeuille ?</th></tr></thead>
+        <tbody>${marques.map(mq => `<tr>
+          <td><strong>${escapeHtml(mq.nom)}</strong></td>
+          <td>${escapeHtml(mq.restaurant_nom || '')}</td>
+          <td><small>${fmtDate(mq.created_at)}</small></td>
+          <td>${mq.is_portefeuille_proprietaire ? '<i class="fas fa-star" style="color:#f59e0b"></i>' : '—'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>` : ''}
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Fermer</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+}
+
 // --- Sous-agents ---
 PAGES['a-sous-agents'] = async (c) => {
   const [sa, inv] = await Promise.all([
@@ -6915,6 +7419,586 @@ async function adminAgentFormModal(agent, onSuccess) {
       onSuccess && onSuccess()
     } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
   }
+}
+
+// ============================================================
+// === CHALLENGES — SUPERADMIN ================================
+// ============================================================
+function challengeStatutBadge(s) {
+  const map = {
+    en_cours: { bg: '#3b82f6', label: 'En cours' },
+    reussi: { bg: '#10b981', label: 'Réussi' },
+    echoue: { bg: '#ef4444', label: 'Échoué' },
+    recompense_attribuee: { bg: '#059669', label: 'Récompensé' },
+    annule: { bg: '#9ca3af', label: 'Annulé' }
+  }
+  const x = map[s] || { bg: '#6b7280', label: s }
+  return `<span style="background:${x.bg};color:#fff;padding:.2rem .6rem;border-radius:4px;font-size:.7rem;text-transform:uppercase">${x.label}</span>`
+}
+
+function challengePeriodeBadge(c) {
+  const today = new Date().toISOString().slice(0, 10)
+  if (c.date_debut > today) return `<span style="background:#fbbf24;color:#78350f;padding:.2rem .6rem;border-radius:4px;font-size:.7rem">À venir</span>`
+  if (c.date_fin < today) return `<span style="background:#9ca3af;color:#fff;padding:.2rem .6rem;border-radius:4px;font-size:.7rem">Terminé</span>`
+  return `<span style="background:#06A05A;color:#fff;padding:.2rem .6rem;border-radius:4px;font-size:.7rem">Actif</span>`
+}
+
+PAGES['admin-challenges'] = async (c) => {
+  const { data } = await api.get('/challenges/admin')
+  const challenges = data.challenges || []
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-flag-checkered"></i> Challenges commerciaux</h1>
+        <div class="subtitle">Créer des défis temporaires pour booster les agents</div>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-secondary" id="syncAll" title="Recalculer toutes les progressions"><i class="fas fa-sync"></i> Synchroniser</button>
+        <button class="btn btn-primary" id="newChallenge"><i class="fas fa-plus"></i> Nouveau challenge</button>
+      </div>
+    </div>
+
+    <div class="card" style="background:#eff6ff;border-left:3px solid #3b82f6;margin-bottom:1rem">
+      <div style="display:flex;align-items:start;gap:.6rem;font-size:.88rem">
+        <i class="fas fa-circle-info" style="color:#3b82f6;font-size:1.1rem;margin-top:.15rem"></i>
+        <div>
+          <strong>Principe :</strong> Un challenge fixe un objectif (X restaurants ou marques apportés entre 2 dates) → récompense (ex : 15 restaurants en portefeuille 100%). Pendant la période, vous pouvez <em>suspendre la règle des 5/5</em> standard pour les participants.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="fas fa-list"></i> ${challenges.length} challenge(s)</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>Code</th><th>Nom</th><th>Période</th><th>Statut</th>
+          <th class="text-right">Objectif</th><th>Récompense</th>
+          <th class="text-right">Participants</th><th class="text-right">Réussis</th><th class="text-right">Récompensés</th>
+          <th class="text-right">Actions</th>
+        </tr></thead>
+        <tbody>${challenges.length ? challenges.map(ch => `<tr>
+          <td><strong style="font-family:monospace;font-size:.8rem">${escapeHtml(ch.code)}</strong></td>
+          <td>
+            <strong>${escapeHtml(ch.nom)}</strong>
+            ${ch.suspend_tranche_standard ? '<br><span style="background:#fef3c7;color:#92400e;padding:.1rem .4rem;border-radius:3px;font-size:.7rem">Suspend règle 5/5</span>' : ''}
+          </td>
+          <td><small>${fmtDate(ch.date_debut)} → ${fmtDate(ch.date_fin)}</small></td>
+          <td>${challengePeriodeBadge(ch)} ${ch.actif ? '' : '<br><small class="text-muted">Archivé</small>'}</td>
+          <td class="text-right"><strong>${ch.objectif_quantite}</strong> ${ch.type_objectif === 'restaurants' ? 'restos' : ch.type_objectif === 'marques' ? 'marques' : 'restos/marques'}</td>
+          <td><small>${
+            ch.type_recompense === 'portefeuille_restaurants' ? (ch.recompense_quantite || 0) + ' restos en portefeuille 100%'
+            : ch.type_recompense === 'portefeuille_marques' ? (ch.recompense_quantite || 0) + ' marques en portefeuille 100%'
+            : ch.type_recompense === 'bonus_montant' ? fmtEUR(ch.recompense_montant || 0) + ' de bonus'
+            : escapeHtml(ch.recompense_description || 'Autre')
+          }</small></td>
+          <td class="text-right">${ch.nb_participants || 0}</td>
+          <td class="text-right" style="color:#059669"><strong>${ch.nb_reussis || 0}</strong></td>
+          <td class="text-right" style="color:#10b981"><strong>${ch.nb_recompenses || 0}</strong></td>
+          <td class="text-right" style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary" data-view="${ch.id}" title="Détail"><i class="fas fa-eye"></i></button>
+            <button class="btn btn-sm btn-secondary" data-edit="${ch.id}" title="Modifier"><i class="fas fa-edit"></i></button>
+            <button class="btn btn-sm btn-danger" data-del="${ch.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+          </td>
+        </tr>`).join('') : '<tr><td colspan="10" class="text-center text-muted">Aucun challenge</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `
+
+  c.querySelector('#newChallenge').onclick = () => challengeFormModal(null, () => navigate('admin-challenges'))
+  c.querySelector('#syncAll').onclick = async () => {
+    try {
+      const r = await api.post('/challenges/admin/synchroniser')
+      toast(r.data.nb_synchronises + ' participation(s) synchronisée(s)')
+      navigate('admin-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
+  c.querySelectorAll('[data-view]').forEach(b => b.onclick = () => challengeDetailModal(b.dataset.view))
+  c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
+    const ch = challenges.find(x => x.id == b.dataset.edit)
+    challengeFormModal(ch, () => navigate('admin-challenges'))
+  })
+  c.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Supprimer ce challenge et toutes les participations ? Action irréversible.')) return
+    try {
+      await api.delete('/challenges/admin/' + b.dataset.del)
+      toast('Challenge supprimé')
+      navigate('admin-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+}
+
+async function challengeFormModal(challenge, onSuccess) {
+  const isEdit = !!challenge
+  // Récupérer la liste des agents pour la sélection éventuelle
+  let agents = []
+  try {
+    const { data } = await api.get('/admin/users?role=agent')
+    agents = (data.users || data || []).filter(u => u.role === 'agent')
+  } catch {}
+
+  const html = `
+    <form id="chForm">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+        <div class="form-group">
+          <label>Code (unique) *</label>
+          <input class="form-control" name="code" required ${isEdit ? 'readonly' : ''} value="${escapeHtml(challenge?.code || '')}" placeholder="CH-2026-05-SEBASTIAN-30R">
+        </div>
+        <div class="form-group">
+          <label>Nom *</label>
+          <input class="form-control" name="nom" required value="${escapeHtml(challenge?.nom || '')}" placeholder="Challenge été 2026">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea class="form-control" name="description" rows="2">${escapeHtml(challenge?.description || '')}</textarea>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+        <div class="form-group">
+          <label>Date début *</label>
+          <input class="form-control" type="date" name="date_debut" required value="${challenge?.date_debut || ''}">
+        </div>
+        <div class="form-group">
+          <label>Date fin *</label>
+          <input class="form-control" type="date" name="date_fin" required value="${challenge?.date_fin || ''}">
+        </div>
+      </div>
+
+      <h4 style="margin:1rem 0 .5rem;color:#06A05A"><i class="fas fa-bullseye"></i> Objectif</h4>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:.8rem">
+        <div class="form-group">
+          <label>Type *</label>
+          <select class="form-control" name="type_objectif" required>
+            <option value="restaurants" ${challenge?.type_objectif==='restaurants'?'selected':''}>Restaurants apportés</option>
+            <option value="marques" ${challenge?.type_objectif==='marques'?'selected':''}>Marques apportées</option>
+            <option value="restaurants_ou_marques" ${challenge?.type_objectif==='restaurants_ou_marques'?'selected':''}>Restaurants OU marques</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Quantité *</label>
+          <input class="form-control" type="number" name="objectif_quantite" min="1" required value="${challenge?.objectif_quantite || ''}" placeholder="30">
+        </div>
+      </div>
+
+      <h4 style="margin:1rem 0 .5rem;color:#06A05A"><i class="fas fa-gift"></i> Récompense</h4>
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:.8rem">
+        <div class="form-group">
+          <label>Type *</label>
+          <select class="form-control" name="type_recompense" required>
+            <option value="portefeuille_restaurants" ${challenge?.type_recompense==='portefeuille_restaurants'?'selected':''}>N restaurants en portefeuille 100%</option>
+            <option value="portefeuille_marques" ${challenge?.type_recompense==='portefeuille_marques'?'selected':''}>N marques en portefeuille 100%</option>
+            <option value="bonus_montant" ${challenge?.type_recompense==='bonus_montant'?'selected':''}>Bonus en €</option>
+            <option value="autre" ${challenge?.type_recompense==='autre'?'selected':''}>Autre</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Quantité (si N)</label>
+          <input class="form-control" type="number" name="recompense_quantite" min="0" value="${challenge?.recompense_quantite || ''}" placeholder="15">
+        </div>
+        <div class="form-group">
+          <label>Montant € (si bonus)</label>
+          <input class="form-control" type="number" name="recompense_montant" step="0.01" min="0" value="${challenge?.recompense_montant || ''}">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Description récompense (libre)</label>
+        <input class="form-control" name="recompense_description" value="${escapeHtml(challenge?.recompense_description || '')}" placeholder="Ex: 15 restaurants à choisir parmi ceux apportés">
+      </div>
+
+      <h4 style="margin:1rem 0 .5rem;color:#06A05A"><i class="fas fa-cog"></i> Règles</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+        <div class="form-group">
+          <label><input type="checkbox" name="suspend_tranche_standard" ${challenge?.suspend_tranche_standard?'checked':''}>
+            Suspendre la règle 5/5 pendant le challenge
+          </label>
+          <small class="text-muted">Pendant la période, les participants ne déclenchent PAS la règle standard portefeuille (5e marque/restaurant)</small>
+        </div>
+        <div class="form-group">
+          <label>Cible</label>
+          <select class="form-control" name="cible">
+            <option value="tous" ${(challenge?.cible||'tous')==='tous'?'selected':''}>Tous les agents</option>
+            <option value="selection" ${challenge?.cible==='selection'?'selected':''}>Sélection manuelle</option>
+          </select>
+        </div>
+      </div>
+
+      ${!isEdit ? `
+      <div class="form-group" id="selectionParticipants" style="display:none">
+        <label>Participants présélectionnés (cible = sélection)</label>
+        <select class="form-control" id="participantsIds" multiple size="6" style="height:auto">
+          ${agents.map(a => `<option value="${a.id}">${escapeHtml(a.prenom + ' ' + a.nom)} (${escapeHtml(a.email)})</option>`).join('')}
+        </select>
+        <small class="text-muted">Maintenir Ctrl/Cmd pour sélection multiple</small>
+      </div>
+      ` : ''}
+
+      <div class="form-group">
+        <label>Notes internes (visibles uniquement par le superadmin)</label>
+        <textarea class="form-control" name="notes_internes" rows="2">${escapeHtml(challenge?.notes_internes || '')}</textarea>
+      </div>
+
+      ${isEdit ? `
+      <div class="form-group">
+        <label><input type="checkbox" name="actif" ${challenge?.actif?'checked':''}> Challenge actif (visible et comptabilisé)</label>
+      </div>
+      ` : ''}
+
+      <div class="form-actions" style="margin-top:1rem">
+        <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+        <button type="submit" class="btn btn-primary">${isEdit ? 'Enregistrer' : 'Créer le challenge'}</button>
+      </div>
+    </form>
+  `
+
+  const m = modal(`<i class="fas fa-flag-checkered"></i> ${isEdit ? 'Modifier le challenge' : 'Nouveau challenge'}`, html)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+
+  const cibleSel = m.el.querySelector('select[name="cible"]')
+  const partBlock = m.el.querySelector('#selectionParticipants')
+  function toggleParticipants() {
+    if (partBlock) partBlock.style.display = cibleSel.value === 'selection' ? '' : 'none'
+  }
+  if (cibleSel) { cibleSel.onchange = toggleParticipants; toggleParticipants() }
+
+  m.el.querySelector('#chForm').onsubmit = async (e) => {
+    e.preventDefault()
+    const fd = new FormData(e.target)
+    const body = {}
+    fd.forEach((v, k) => { body[k] = v })
+    body.suspend_tranche_standard = !!m.el.querySelector('[name="suspend_tranche_standard"]').checked
+    if (isEdit) body.actif = !!m.el.querySelector('[name="actif"]').checked
+    body.objectif_quantite = parseInt(body.objectif_quantite) || 0
+    if (body.recompense_quantite) body.recompense_quantite = parseInt(body.recompense_quantite)
+    if (body.recompense_montant) body.recompense_montant = parseFloat(body.recompense_montant)
+
+    if (!isEdit) {
+      const partsSel = m.el.querySelector('#participantsIds')
+      if (partsSel && body.cible === 'selection') {
+        body.participants_ids = Array.from(partsSel.selectedOptions).map(o => parseInt(o.value))
+      }
+    }
+
+    try {
+      if (isEdit) {
+        await api.put('/challenges/admin/' + challenge.id, body)
+        toast('Challenge modifié')
+      } else {
+        const r = await api.post('/challenges/admin', body)
+        toast(`Challenge créé — ${r.data.nb_inscrits || 0} participant(s) inscrit(s)`)
+      }
+      m.close()
+      onSuccess && onSuccess()
+    } catch (err) {
+      toast(err.response?.data?.error || 'Erreur', 'error')
+    }
+  }
+}
+
+async function challengeDetailModal(id) {
+  const { data } = await api.get('/challenges/admin/' + id)
+  const ch = data.challenge
+  const parts = data.participations || []
+
+  const html = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+      <div class="card" style="margin:0">
+        <div class="card-title"><i class="fas fa-info-circle"></i> Challenge</div>
+        <div style="font-size:.9rem;line-height:1.6">
+          <strong>${escapeHtml(ch.nom)}</strong>
+          <div><span class="text-muted">Code :</span> <code>${escapeHtml(ch.code)}</code></div>
+          <div><span class="text-muted">Période :</span> ${fmtDate(ch.date_debut)} → ${fmtDate(ch.date_fin)}</div>
+          <div><span class="text-muted">Objectif :</span> ${ch.objectif_quantite} ${ch.type_objectif}</div>
+          <div><span class="text-muted">Récompense :</span> ${
+            ch.type_recompense === 'portefeuille_restaurants' ? ch.recompense_quantite + ' restos en portefeuille 100%'
+            : ch.type_recompense === 'portefeuille_marques' ? ch.recompense_quantite + ' marques en portefeuille 100%'
+            : ch.type_recompense === 'bonus_montant' ? fmtEUR(ch.recompense_montant) + ' de bonus'
+            : escapeHtml(ch.recompense_description || '')
+          }</div>
+          ${ch.suspend_tranche_standard ? '<div style="margin-top:.5rem;background:#fef3c7;color:#92400e;padding:.4rem .6rem;border-radius:4px;font-size:.8rem"><i class="fas fa-exclamation-triangle"></i> Règle 5/5 suspendue pendant ce challenge</div>' : ''}
+          ${ch.description ? `<div style="margin-top:.5rem"><em>${escapeHtml(ch.description)}</em></div>` : ''}
+        </div>
+      </div>
+      <div class="card" style="margin:0">
+        <div class="card-title"><i class="fas fa-chart-bar"></i> Statistiques</div>
+        <div style="font-size:.9rem;line-height:1.7">
+          <div><span class="text-muted">Participants :</span> <strong>${parts.length}</strong></div>
+          <div><span class="text-muted">Réussis :</span> <strong style="color:#10b981">${parts.filter(p => p.statut === 'reussi' || p.statut === 'recompense_attribuee').length}</strong></div>
+          <div><span class="text-muted">Récompensés :</span> <strong style="color:#059669">${parts.filter(p => p.statut === 'recompense_attribuee').length}</strong></div>
+          ${ch.notes_internes ? `<div style="margin-top:.5rem"><strong>Notes :</strong><br><small>${escapeHtml(ch.notes_internes)}</small></div>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin:0">
+      <div class="card-title"><i class="fas fa-users"></i> Participants (${parts.length})</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>Agent</th><th>Inscrit</th><th>Statut</th>
+          <th class="text-right">Progression</th><th class="text-right">% atteint</th>
+          <th>Date réussite</th><th class="text-right">Actions</th>
+        </tr></thead>
+        <tbody>${parts.length ? parts.map(p => {
+          const pct = ch.objectif_quantite ? Math.round((p.progression_actuelle / ch.objectif_quantite) * 100) : 0
+          return `<tr>
+            <td><strong>${escapeHtml(p.prenom + ' ' + p.nom)}</strong><br><small class="text-muted">${escapeHtml(p.email)}</small></td>
+            <td><small>${fmtDate(p.date_participation)}</small></td>
+            <td>${challengeStatutBadge(p.statut)}</td>
+            <td class="text-right"><strong>${p.progression_actuelle}</strong> / ${ch.objectif_quantite}</td>
+            <td class="text-right" style="color:${pct>=100?'#10b981':pct>=70?'#f59e0b':'#6b7280'}"><strong>${pct}%</strong></td>
+            <td><small>${p.date_reussite ? fmtDate(p.date_reussite) : '—'}</small></td>
+            <td class="text-right" style="white-space:nowrap">
+              ${p.statut === 'reussi' ? `<button class="btn btn-sm btn-primary" data-recompense="${p.id}"><i class="fas fa-gift"></i> Récompenser</button>` : ''}
+              <button class="btn btn-sm btn-danger" data-rmpart="${p.id}" title="Retirer"><i class="fas fa-times"></i></button>
+            </td>
+          </tr>`
+        }).join('') : '<tr><td colspan="7" class="text-center text-muted">Aucun participant</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `
+
+  const m = modal(`<i class="fas fa-flag-checkered"></i> ${escapeHtml(ch.nom)}`, html + `
+    <div class="form-actions" style="margin-top:1rem">
+      <button type="button" class="btn btn-secondary" data-close>Fermer</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelectorAll('[data-recompense]').forEach(b => {
+    b.onclick = () => {
+      const pid = b.dataset.recompense
+      const part = parts.find(p => p.id == pid)
+      challengeRecompenseModal(pid, ch, part, () => { m.close(); challengeDetailModal(id) })
+    }
+  })
+  m.el.querySelectorAll('[data-rmpart]').forEach(b => b.onclick = async () => {
+    if (!confirm('Retirer ce participant ?')) return
+    try {
+      await api.delete('/challenges/admin/' + id + '/participations/' + b.dataset.rmpart)
+      toast('Participant retiré')
+      m.close()
+      challengeDetailModal(id)
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+}
+
+async function challengeRecompenseModal(participationId, challenge, part, onSuccess) {
+  // Récupérer les éléments comptabilisés pour permettre à l'admin de choisir
+  let elements = []
+  try {
+    const { data } = await api.get('/challenges/mine/' + challenge.id)
+    elements = data.elements || []
+  } catch {}
+
+  const isRestos = challenge.type_recompense === 'portefeuille_restaurants'
+  const isMarques = challenge.type_recompense === 'portefeuille_marques'
+  const quantite = challenge.recompense_quantite || 0
+
+  const candidats = elements.filter(e => isRestos ? e.type_element === 'restaurant' : isMarques ? e.type_element === 'marque' : true)
+
+  const html = `
+    <div class="card" style="background:#ecfdf5;border-left:3px solid #10b981;margin-bottom:1rem">
+      <strong><i class="fas fa-gift"></i> Récompense :</strong>
+      ${isRestos ? `${quantite} restaurants en portefeuille 100%`
+       : isMarques ? `${quantite} marques en portefeuille 100%`
+       : challenge.type_recompense === 'bonus_montant' ? `${fmtEUR(challenge.recompense_montant)} de bonus`
+       : escapeHtml(challenge.recompense_description || '')}
+      <br><span class="text-muted">pour ${escapeHtml(part.prenom + ' ' + part.nom)} (${part.progression_actuelle}/${challenge.objectif_quantite} atteints)</span>
+    </div>
+
+    <form id="recompForm">
+      ${(isRestos || isMarques) ? `
+        <div class="form-group">
+          <label>Sélectionner les ${quantite} ${isRestos ? 'restaurants' : 'marques'} à mettre en portefeuille 100% pour l'agent</label>
+          <select class="form-control" id="recompIds" multiple size="${Math.min(candidats.length, 10)}" style="height:auto">
+            ${candidats.map(e => `<option value="${e.element_id}">${isRestos ? 'Resto' : 'Marque'} #${e.element_id} (apporté le ${fmtDate(e.date_apport)})</option>`).join('')}
+          </select>
+          <small class="text-muted">Maintenir Ctrl/Cmd pour sélection multiple. Si rien sélectionné, les ${quantite} premiers apports seront automatiquement choisis.</small>
+        </div>
+      ` : ''}
+      <div class="form-group">
+        <label>Notes (visibles dans le détail de la participation)</label>
+        <textarea class="form-control" name="notes" rows="2" placeholder="Ex: Bonus versé sur le compte le 01/07/2026"></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Attribuer la récompense</button>
+      </div>
+    </form>
+  `
+
+  const m = modal('<i class="fas fa-gift"></i> Attribuer la récompense', html)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+  m.el.querySelector('#recompForm').onsubmit = async (e) => {
+    e.preventDefault()
+    const body = { notes: m.el.querySelector('[name="notes"]').value }
+    const sel = m.el.querySelector('#recompIds')
+    if (sel) {
+      const ids = Array.from(sel.selectedOptions).map(o => parseInt(o.value))
+      if (isRestos) body.restos_ids_choisis = ids
+      else if (isMarques) body.marques_ids_choisies = ids
+    }
+    try {
+      const r = await api.post('/challenges/admin/participations/' + participationId + '/recompenser', body)
+      toast(`Récompense attribuée — ${r.data.nb_attribue} élément(s) ajoutés au portefeuille`)
+      m.close()
+      onSuccess && onSuccess()
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
+}
+
+// ============================================================
+// === CHALLENGES — AGENT =====================================
+// ============================================================
+PAGES['a-challenges'] = async (c) => {
+  const { data } = await api.get('/challenges/mine')
+  const challenges = data.challenges || []
+  const today = new Date().toISOString().slice(0, 10)
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-flag-checkered"></i> Challenges</h1>
+        <div class="subtitle">Vos défis commerciaux et leur progression</div>
+      </div>
+    </div>
+
+    ${challenges.length === 0 ? `
+      <div class="card text-center" style="padding:3rem">
+        <i class="fas fa-flag-checkered" style="font-size:3rem;color:#9ca3af;margin-bottom:1rem"></i>
+        <p class="text-muted">Aucun challenge actif pour le moment.</p>
+      </div>
+    ` : `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:1rem">
+        ${challenges.map(ch => {
+          const pct = ch.objectif_quantite ? Math.min(100, Math.round(((ch.participation?.progression_actuelle || 0) / ch.objectif_quantite) * 100)) : 0
+          const reste = Math.max(0, ch.objectif_quantite - (ch.participation?.progression_actuelle || 0))
+          const joursRestants = Math.max(0, Math.ceil((new Date(ch.date_fin) - new Date(today)) / (1000*60*60*24)))
+          const enPeriode = ch.date_debut <= today && ch.date_fin >= today
+          return `
+          <div class="card" style="position:relative">
+            <div style="position:absolute;top:1rem;right:1rem">${challengePeriodeBadge(ch)}</div>
+            <h3 style="margin:0 0 .3rem;color:#06A05A"><i class="fas fa-flag-checkered"></i> ${escapeHtml(ch.nom)}</h3>
+            <div style="font-size:.85rem;color:#6b7280;margin-bottom:.8rem">
+              ${fmtDate(ch.date_debut)} → ${fmtDate(ch.date_fin)}
+              ${enPeriode ? `<strong style="color:#06A05A"> · ${joursRestants} jour${joursRestants>1?'s':''} restant${joursRestants>1?'s':''}</strong>` : ''}
+            </div>
+            ${ch.description ? `<p style="font-size:.88rem;color:#475569">${escapeHtml(ch.description)}</p>` : ''}
+
+            <div style="background:#f9fafb;padding:.8rem;border-radius:6px;margin:.8rem 0">
+              <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:.4rem">
+                <span><i class="fas fa-bullseye"></i> Objectif</span>
+                <strong>${ch.objectif_quantite} ${ch.type_objectif === 'restaurants' ? 'restaurants' : ch.type_objectif === 'marques' ? 'marques' : 'restos/marques'}</strong>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:.4rem">
+                <span><i class="fas fa-gift"></i> Récompense</span>
+                <strong style="color:#06A05A">${
+                  ch.type_recompense === 'portefeuille_restaurants' ? `${ch.recompense_quantite} restos en portefeuille 100%`
+                  : ch.type_recompense === 'portefeuille_marques' ? `${ch.recompense_quantite} marques en portefeuille 100%`
+                  : ch.type_recompense === 'bonus_montant' ? `${fmtEUR(ch.recompense_montant)} de bonus`
+                  : escapeHtml(ch.recompense_description || 'Autre')
+                }</strong>
+              </div>
+              ${ch.suspend_tranche_standard ? `<div style="font-size:.78rem;color:#92400e;background:#fef3c7;padding:.3rem .5rem;border-radius:3px;margin-top:.5rem"><i class="fas fa-info-circle"></i> Pendant ce challenge, la règle standard 5/5 est suspendue</div>` : ''}
+            </div>
+
+            ${ch.participation ? `
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:.3rem">
+                  <span><strong>Ma progression</strong></span>
+                  <strong style="color:#06A05A">${ch.participation.progression_actuelle} / ${ch.objectif_quantite} (${pct}%)</strong>
+                </div>
+                <div style="background:#e5e7eb;height:14px;border-radius:7px;overflow:hidden">
+                  <div style="background:linear-gradient(90deg,#10b981,#06A05A);height:100%;width:${pct}%;transition:width .3s"></div>
+                </div>
+                ${reste > 0 && enPeriode ? `<small class="text-muted">Encore ${reste} pour atteindre l'objectif</small>` : ''}
+                <div style="margin-top:.8rem">${challengeStatutBadge(ch.participation.statut)}</div>
+                ${ch.participation.statut === 'reussi' ? `<div style="margin-top:.5rem;color:#10b981;font-size:.88rem"><i class="fas fa-check-circle"></i> Objectif atteint le ${fmtDate(ch.participation.date_reussite)}. En attente de validation par le superadmin.</div>` : ''}
+                ${ch.participation.statut === 'recompense_attribuee' ? `<div style="margin-top:.5rem;color:#059669;font-size:.88rem"><i class="fas fa-gift"></i> Récompense attribuée le ${fmtDate(ch.participation.recompense_attribuee_at)} !</div>` : ''}
+              </div>
+              <div style="margin-top:1rem;display:flex;gap:.4rem">
+                <button class="btn btn-sm btn-secondary" data-sync="${ch.id}"><i class="fas fa-sync"></i> Synchroniser ma progression</button>
+                <button class="btn btn-sm btn-primary" data-detail="${ch.id}"><i class="fas fa-list"></i> Voir le détail</button>
+              </div>
+            ` : ch.cible === 'tous' ? `
+              <button class="btn btn-primary" data-join="${ch.id}"><i class="fas fa-rocket"></i> Participer</button>
+            ` : `<div class="text-muted" style="font-size:.85rem"><i class="fas fa-lock"></i> Challenge sur sélection uniquement</div>`}
+          </div>
+          `
+        }).join('')}
+      </div>
+    `}
+  `
+
+  c.querySelectorAll('[data-join]').forEach(b => b.onclick = async () => {
+    try {
+      await api.post('/challenges/' + b.dataset.join + '/participer')
+      toast('Inscription confirmée !')
+      navigate('a-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+  c.querySelectorAll('[data-sync]').forEach(b => b.onclick = async () => {
+    try {
+      const r = await api.post('/challenges/' + b.dataset.sync + '/synchroniser')
+      toast(`Progression : ${r.data.progression}` + (r.data.objectif_atteint ? ' — objectif atteint !' : ''))
+      navigate('a-challenges')
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  })
+  c.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => agentChallengeDetailModal(b.dataset.detail))
+}
+
+async function agentChallengeDetailModal(id) {
+  const { data } = await api.get('/challenges/mine/' + id)
+  const ch = data.challenge
+  const elements = data.elements || []
+  const restos = data.restos || []
+  const marques = data.marques || []
+
+  const html = `
+    <div class="card" style="background:#f0fdf4;border-left:3px solid #06A05A;margin-bottom:1rem">
+      <strong>${escapeHtml(ch.nom)}</strong>
+      <div style="font-size:.85rem;color:#475569">${fmtDate(ch.date_debut)} → ${fmtDate(ch.date_fin)}</div>
+      ${ch.description ? `<p style="font-size:.85rem;margin:.5rem 0 0">${escapeHtml(ch.description)}</p>` : ''}
+    </div>
+
+    <div class="card" style="margin:0 0 1rem">
+      <div class="card-title"><i class="fas fa-chart-line"></i> Ma progression : ${data.progression} / ${ch.objectif_quantite}</div>
+      <div style="background:#e5e7eb;height:18px;border-radius:9px;overflow:hidden;margin:.5rem 0">
+        <div style="background:linear-gradient(90deg,#10b981,#06A05A);height:100%;width:${Math.min(100, Math.round(data.progression/ch.objectif_quantite*100))}%"></div>
+      </div>
+    </div>
+
+    ${restos.length ? `
+    <div class="card" style="margin:0 0 1rem">
+      <div class="card-title"><i class="fas fa-store"></i> Restaurants comptabilisés (${restos.length})</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Nom</th><th>Ville</th><th>Date signature</th><th>Portefeuille ?</th></tr></thead>
+        <tbody>${restos.map(r => `<tr>
+          <td><strong>${escapeHtml(r.nom)}</strong></td>
+          <td>${escapeHtml(r.ville || '')}</td>
+          <td><small>${fmtDate(r.date_signature)}</small></td>
+          <td>${r.is_portefeuille_proprietaire ? '<span style="color:#06A05A"><i class="fas fa-star"></i> Oui</span>' : '<span class="text-muted">Non</span>'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>
+    ` : ''}
+
+    ${marques.length ? `
+    <div class="card" style="margin:0 0 1rem">
+      <div class="card-title"><i class="fas fa-tags"></i> Marques comptabilisées (${marques.length})</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Marque</th><th>Restaurant</th><th>Date</th><th>Portefeuille ?</th></tr></thead>
+        <tbody>${marques.map(m => `<tr>
+          <td><strong>${escapeHtml(m.nom)}</strong></td>
+          <td>${escapeHtml(m.restaurant_nom || '')}</td>
+          <td><small>${fmtDate(m.created_at)}</small></td>
+          <td>${m.is_portefeuille_proprietaire ? '<span style="color:#06A05A"><i class="fas fa-star"></i> Oui</span>' : '<span class="text-muted">Non</span>'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>
+    ` : ''}
+  `
+
+  const m = modal('<i class="fas fa-flag-checkered"></i> Détail du challenge', html + `
+    <div class="form-actions"><button type="button" class="btn btn-secondary" data-close>Fermer</button></div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
 }
 
 // ===== Bootstrap =====

@@ -52,6 +52,42 @@ Application web complète pour gérer le suivi des commissions de votre activit�
 
 ## 🆕 Nouveautés (session courante)
 
+### 🏁 Module CHALLENGES commerciaux (migration 0012 + seed 0013)
+- **Superadmin** : CRUD complet des challenges temporaires (`admin-challenges`)
+  - Période, type d'objectif (`restaurants` / `marques` / `restaurants_ou_marques`)
+  - Quantité objectif (ex : 30 restos)
+  - Type de récompense (`portefeuille_restaurants`, `portefeuille_marques`, `bonus_montant`, `autre`)
+  - Quantité/montant/description de la récompense
+  - **Suspension règle 5/5** standard pendant la période (`suspend_tranche_standard`)
+  - Cible : `tous` (auto-inscription) ou `selection` (manuelle)
+  - Bouton **Synchroniser** = recalcule la progression de toutes les participations
+  - Bouton **Récompenser** sur une participation `reussi` (attribue les portefeuilles)
+- **Agent** : page `a-challenges` avec cartes de progression
+  - Barre de progression, statut (en cours / réussi / échoué / récompense attribuée)
+  - Bouton **Participer** (si cible='tous' et pas encore inscrit)
+  - Bouton **Recalculer** (force la synchro de sa progression)
+- **Tables** : `challenges` + `challenge_participations` + `challenge_elements`
+- **Seed 0013** : challenge `CH-2026-SEB-30R` pour Sebastian Garcia
+  - Période **1er mai → 30 juin 2026**, objectif **30 restos**, récompense **15 portefeuille 100%** au choix
+  - `suspend_tranche_standard=1` → règle standard 5/5 suspendue pendant la période
+  - **Sebastian** inscrit avec progression initiale **2/30** (Sultant Restaurant + CHEZLEBOSS)
+- **API** :
+  - Agent : `GET /api/challenges/mine`, `GET /mine/:id`, `POST /:id/participer`, `POST /:id/synchroniser`
+  - Admin : `GET/POST/PUT/DELETE /api/challenges/admin[/:id]`, `POST /admin/:id/inscrire`, `DELETE /admin/:id/participations/:pid`, `POST /admin/synchroniser`, `POST /admin/participations/:pid/recompenser`
+
+### 👥 Seed 7 commerciaux (migration 0013)
+Tous N0 (parent_id=NULL), portefeuilles existants entrés **avant le challenge** :
+- **Sebastian Garcia** (`sebastian.garcia@dropeat.fr` / `Sebastian2026!`) — 10 restos / 13 marques
+  - Krock Takos = **5e marque portefeuille** (règle standard 5/5)
+  - La Corniche = **portefeuille client** (BB GOOD BURGER TARASCON)
+  - Sultant Restaurant (rang 9, 2026-05-01) = **point de bascule** challenge
+- **Kamel** (`kamel@dropeat.fr` / `Kamel2026!`) — MEAL N. FOOD → BB GOOD BURGER Valence
+- **Hamou** (`hamou@dropeat.fr` / `Hamou2026!`) — MALABAR FOODS (2 adresses Dijon) → BB GOOD BURGER DIJON
+- **Sabrina** (`sabrina@dropeat.fr` / `Sabrina2026!`) — Brasserie Carré St Dominique → Burgerignos Nîmes ; ELSA DELICE → Kroc Burgers Nîmes
+- **Greg** (`greg@dropeat.fr` / `Greg2026!`) — CAVERNE A PIZZA → Pizza Banger ; BENASTA → Maison Nassima
+- **Fabien** (`fabien@dropeat.fr` / `Fabien2026!`) — Le Grill System → Gros Croc Marseille ; Istanbul Kebab → Kroc Takos Marseille
+- **Elbak** (`elbak@dropeat.fr` / `Elbak2026!`) — LK → BB GOOD BURGER LAVAL
+
 ### 🌳 Dashboard agent — Arbre MLM 2 niveaux (N+1 + N+2)
 - Visualisation de l'arbre MLM avec **noms des filleuls** (N+1) et **sous-filleuls** (N+2)
 - Compteurs par nœud : nb filleuls, CA période, etc.
