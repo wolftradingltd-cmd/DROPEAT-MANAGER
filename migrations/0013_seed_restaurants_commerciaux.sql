@@ -1,6 +1,6 @@
 -- ============================================================
--- Migration 0013 : Restaurants/Marques pour les 7 commerciaux EXISTANTS
---                + Challenge Sebastian Garcia (1er mai → 30 juin 2026)
+-- Migration 0013 : Restaurants/Marques RÉELS pour les 7 commerciaux EXISTANTS
+--                + Challenge Sébastien Garcia (1er mai → 30 juin 2026)
 -- ============================================================
 -- ATTENTION : NE CRÉE AUCUN UTILISATEUR — utilise les IDs existants :
 --   ID 14 → Sébastien Garcia    (developpement.restaurent@gmail.com)
@@ -11,328 +11,418 @@
 --   ID 20 → Fabien Rosso        (fafaginou@live.fr)
 --   ID 21 → Elbac Haidar Mohamed (moielbac@gmail.com)
 --
--- Tous les restaurants et marques sont rentrés AVANT le challenge
--- (date_signature < 2026-05-01) afin qu'ils ne soient PAS comptés
+-- RÈGLE CRITIQUE : Tous les restos/marques sont rentrés AVANT le challenge
+-- (date_signature < 2026-05-01) afin qu'ils ne soient PAS comptabilisés
 -- dans la progression du challenge.
 --
--- Règle critique : pour Sébastien, à partir de Sultant Restaurant,
+-- Pour Sébastien : à partir de « Sultant Restaurant » (tranche 2 / resto 4),
 -- la règle standard 5/5 est SUSPENDUE jusqu'au 30 juin 2026.
--- Les 5 premiers restos (tranche 1) ont déjà attribué le 5e en
--- portefeuille 100% (O'Grill avec Krock Takos en 5e marque).
--- Les 5 suivants (tranche 2) sont apportés AVANT le 1er mai mais
--- la 5e attribution n'a PAS lieu (règle suspendue par le challenge).
 -- ============================================================
 
 -- ============================================================
--- 1. RESTAURANTS DE SÉBASTIEN GARCIA (user_id = 14) — 10 restos
+-- 1. RESTAURANTS DE SÉBASTIEN GARCIA (user_id = 14)
 -- ============================================================
--- IDs 17..26 — toutes date_signature < 2026-05-01 (avant challenge)
--- Tranche 1 (restos 1..5) : règle 5/5 standard appliquée → resto #5 = portefeuille 100%
--- Tranche 2 (restos 6..10) : commence à Sultant Restaurant → règle SUSPENDUE par challenge
+-- TRANCHE 1 (5 restos) — règle 5/5 STANDARD : O'Grill = 5e portefeuille
+-- Note : O'Grill apparaît UNE seule fois en tant que restaurant
+-- (avec 2 marques : Pizza Nostra + Krock Takos, la 5e marque portefeuille)
 -- ============================================================
-INSERT OR IGNORE INTO restaurants
-  (id, nom, adresse, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
-   date_signature, actif, gerant_nom, gerant_prenom, notes,
+INSERT INTO restaurants
+  (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
+   date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
 VALUES
-  -- Tranche 1 Sébastien : restos 1..5 (règle 5/5 standard appliquée)
-  (17, 'Restaurant SG #1', 'Adresse SG1', NULL, 14, 1, 0,
-   '2026-01-20', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 1 / position 1',
+  -- Tranche 1
+  (17, 'O''Grill', '24 Route d''Espalion', '12850', 'Onet-le-Château', 14, 1, 1,
+   '2026-01-20', 1, 'CIFTCI', 'CAHIT', 'cahitdrop@atomicmail.io',
+   'Sébastien — TRANCHE 1 / R1 — Restaurant principal (Tacos/Pizzas/Burgers). Mot de passe : Dropeat2026@. Plateforme Uber : https://urls.fr/Fjz5KE. 5e MARQUE portefeuille = Krock Takos (dans ce restaurant).',
    '2026-01-20 10:00:00', '2026-01-20 10:00:00'),
-  (18, 'Restaurant SG #2', 'Adresse SG2', NULL, 14, 2, 0,
-   '2026-02-01', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 1 / position 2',
+  (18, 'Taco 19', '21 B Avenue Franklin Roosevelt', '30000', 'Nîmes', 14, 2, 0,
+   '2026-02-01', 1, 'CHERKAOUI', 'IMANE', 'imanecher@atomicmail.io',
+   'Sébastien — TRANCHE 1 / R2. Emails : imanecher@atomicmail.io + coversip.business@gmail.com. Mot de passe : Dropeat@2026. Plateforme Uber : https://urlr.me/fGDxEN.',
    '2026-02-01 10:00:00', '2026-02-01 10:00:00'),
-  (19, 'Restaurant SG #3', 'Adresse SG3', NULL, 14, 3, 0,
-   '2026-02-15', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 1 / position 3',
+  (19, 'BIGG BURGER30', '21 Boulevard Gambetta', '30000', 'Nîmes', 14, 3, 0,
+   '2026-02-15', 1, 'KAMEL', 'Laila', 'lailakamel@atomicmail.io',
+   'Sébastien — TRANCHE 1 / R3. Emails : lailakamel@atomicmail.io + robertsannaofficiel@gmail.com. Mot de passe : Dropeat@2026. Plateforme Uber : https://urls.fr/VLvgOf.',
    '2026-02-15 10:00:00', '2026-02-15 10:00:00'),
-  (20, 'Restaurant SG #4', 'Adresse SG4', NULL, 14, 4, 0,
-   '2026-03-01', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 1 / position 4',
+  (20, 'GUJJAR', '18 Rue des Écoles Laïques', '34000', 'Montpellier', 14, 4, 0,
+   '2026-03-01', 1, 'SHAHZAD', 'Ajmal', 'shahzadajmal@atomicmail.io',
+   'Sébastien — TRANCHE 1 / R4. Emails : shahzadajmal@atomicmail.io + juliapaya361@gmail.com. Mot de passe : Dropeat@2026. Plateforme Uber : https://urls.fr/98BBnc.',
    '2026-03-01 10:00:00', '2026-03-01 10:00:00'),
-  (21, 'O''Grill (Portefeuille 100%)', 'Adresse O''Grill', NULL, 14, 5, 1,
-   '2026-03-10', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 1 / position 5 = ATTRIBUTION portefeuille 100% (règle 5/5 standard)',
+  -- PORTEFEUILLE CLIENT (5e resto) — règle 5/5 standard
+  (21, 'La Corniche', '24 Boulevard Victor Hugo', '13150', 'Tarascon', 14, 5, 1,
+   '2026-03-10', 1, 'JABRI', 'MAHER', 'lacorniche15@protonmail.com',
+   'Sébastien — TRANCHE 1 / R5 = PORTEFEUILLE CLIENT 100% (règle 5/5 standard). Mot de passe : Dropeat@2026. Plateforme Uber : https://l1nq.com/7g2wuvq.',
    '2026-03-10 10:00:00', '2026-03-10 10:00:00'),
-  -- Tranche 2 Sébastien : à partir de Sultant Restaurant — règle 5/5 SUSPENDUE par challenge
-  (22, 'Sultant Restaurant', 'Adresse Sultant', NULL, 14, 6, 0,
-   '2026-03-20', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 2 / position 1 — Sultant Restaurant : point de départ de la suspension règle 5/5 (remplacée par challenge CH-2026-05-SEBASTIAN-30R)',
+  -- TRANCHE 2 — RÈGLE 5/5 SUSPENDUE à partir de Sultant Restaurant
+  (22, 'CITY BRUNCH', '35 Rue de Verdun', '34000', 'Montpellier', 14, 6, 0,
+   '2026-03-20', 1, 'MANAP', 'Delphine', 'citybrunch@protonmail.com',
+   'Sébastien — TRANCHE 2 / R1. Mot de passe : Dropeat@2026.',
    '2026-03-20 10:00:00', '2026-03-20 10:00:00'),
-  (23, 'Restaurant SG #7', 'Adresse SG7', NULL, 14, 7, 0,
-   '2026-04-01', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 2 / position 2 (règle 5/5 suspendue)',
+  (23, 'Le 100dwich', '2 Boulevard du Sergent Triaire', '30000', 'Nîmes', 14, 7, 0,
+   '2026-04-01', 1, 'TALHAOUI', 'Hommad', 'le100witch@atomicmail.io',
+   'Sébastien — TRANCHE 2 / R2. Mot de passe : Dropeat@2026. Lien : https://urli.info/1tYPY.',
    '2026-04-01 10:00:00', '2026-04-01 10:00:00'),
-  (24, 'Restaurant SG #8', 'Adresse SG8', NULL, 14, 8, 0,
-   '2026-04-10', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 2 / position 3 (règle 5/5 suspendue)',
+  (24, 'SMASHOW', '118 Route d''Avignon', '30000', 'Nîmes', 14, 8, 0,
+   '2026-04-10', 1, 'NAOUALI', 'Bilel', 'solarimpulse.game@gmail.com',
+   'Sébastien — TRANCHE 2 / R3. Mot de passe : Dropeat@2026. Plateforme Uber.',
    '2026-04-10 10:00:00', '2026-04-10 10:00:00'),
-  (25, 'Restaurant SG #9', 'Adresse SG9', NULL, 14, 9, 0,
-   '2026-04-20', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 2 / position 4 (règle 5/5 suspendue)',
+  -- DÉBUT SUSPENSION RÈGLE 5/5 (Sultant Restaurant)
+  (25, 'Sultant Restaurant', '21 Place du Millénaire', '34000', 'Montpellier', 14, 9, 0,
+   '2026-04-20', 1, 'MEHMET', 'Selim', 'sultant34@protonmail.com',
+   'Sébastien — TRANCHE 2 / R4 — RESTAURANT DE DÉPART DE LA SUSPENSION RÈGLE 5/5 (jusqu''au 30 juin 2026). Mot de passe : Dropeat@2026. Plateforme Uber : https://urls.fr/UTxE2t.',
    '2026-04-20 10:00:00', '2026-04-20 10:00:00'),
-  (26, 'Restaurant SG #10', 'Adresse SG10', NULL, 14, 10, 0,
-   '2026-04-28', 1, 'Garcia', 'Sébastien',
-   'Apport Sébastien — tranche 2 / position 5 — règle 5/5 SUSPENDUE : pas d''attribution automatique (remplacée par challenge)',
+  (26, 'CHEZLEBOSS', '320 Allée de Craponne', NULL, 'Salon-de-Provence', 14, 10, 0,
+   '2026-04-28', 1, 'Bouwdene', 'Jessim', 'chezleboss@protonmail.com',
+   'Sébastien — TRANCHE 2 / R5 — règle 5/5 SUSPENDUE : pas d''attribution automatique. Mot de passe : Dropeat@2026. Plateforme Uber : https://urlr.me/B9G7xN.',
    '2026-04-28 10:00:00', '2026-04-28 10:00:00');
 
 -- ============================================================
 -- 2. RESTAURANTS DES AUTRES COMMERCIAUX
 -- ============================================================
 
--- Kamel Mehdi (user_id = 12) — 1 resto : MEAL N. FOOD
-INSERT OR IGNORE INTO restaurants
-  (id, nom, adresse, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
-   date_signature, actif, gerant_nom, gerant_prenom, notes,
+-- Kamel Mehdi (user_id = 12) — 1 resto
+INSERT INTO restaurants
+  (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
+   date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
 VALUES
-  (27, 'MEAL N. FOOD', 'Adresse Meal N Food', NULL, 12, 1, 0,
-   '2026-02-15', 1, 'Mehdi', 'Kamel',
-   'Apport Kamel Mehdi — 1er restaurant',
+  (27, 'MEAL N. FOOD', '72 Rue Montplaisir', '26000', 'Valence', 12, 1, 0,
+   '2026-02-15', 1, 'MERZOUG', 'BRICE', 'merzougbrice@atomicmail.io',
+   'Kamel — TRANCHE 1 / R1. Emails : merzougbrice@atomicmail.io + arricaltd@gmail.com. Mot de passe : Dropeat@2026. Plateforme Uber : https://urls.fr/JjQqBuu. Région : ARA.',
    '2026-02-15 11:00:00', '2026-02-15 11:00:00');
 
--- Hamou OULD BESSI (user_id = 29) — 1 resto : MALABAR FOODS
-INSERT OR IGNORE INTO restaurants
-  (id, nom, adresse, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
-   date_signature, actif, gerant_nom, gerant_prenom, notes,
+-- Hamou OULD BESSI (user_id = 29) — 1 resto
+INSERT INTO restaurants
+  (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
+   date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
 VALUES
-  (28, 'MALABAR FOODS', 'Adresse Malabar', NULL, 29, 1, 0,
-   '2026-02-20', 1, 'OULD BESSI', 'Hamou',
-   'Apport Hamou OULD BESSI — 1er restaurant',
+  (28, 'MALABAR FOODS', '39 Rue Berbisey', '21000', 'Dijon', 29, 1, 0,
+   '2026-02-20', 1, 'THOMAS', 'ROBIN', 'malabarfood@protonmail.com',
+   'Hamou — TRANCHE 1 / R1. Adresses : 39 Rue Berbisey, 21000 Dijon ET 13 Boulevard de Strasbourg, Dijon 21000. Mot de passe : Dropeat@2026. Plateforme Uber : https://sl1nk.com/l8itfvu.',
    '2026-02-20 11:00:00', '2026-02-20 11:00:00');
 
 -- Sabrina Hadri (user_id = 13) — 2 restos
-INSERT OR IGNORE INTO restaurants
-  (id, nom, adresse, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
-   date_signature, actif, gerant_nom, gerant_prenom, notes,
+INSERT INTO restaurants
+  (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
+   date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
 VALUES
-  (29, 'Restaurant Sabrina #1', 'Adresse Sabrina 1', NULL, 13, 1, 0,
-   '2026-03-01', 1, 'Hadri', 'Sabrina',
-   'Apport Sabrina Hadri — 1er restaurant',
+  (29, 'Brasserie du Carré St Dominique', '329 Avenue de Bir Hakeim, Carré St Dominique', '30000', 'Nîmes', 13, 1, 0,
+   '2026-03-01', 1, 'KRAICHI', 'MOUNIA', 'taibimounia@protonmail.com',
+   'Sabrina — TRANCHE 1 / R1. Mot de passe : Dropeat@2026. Plateforme Uber : https://sl1nk.com/qge11h5.',
    '2026-03-01 11:00:00', '2026-03-01 11:00:00'),
-  (30, 'Restaurant Sabrina #2', 'Adresse Sabrina 2', NULL, 13, 2, 0,
-   '2026-03-20', 1, 'Hadri', 'Sabrina',
-   'Apport Sabrina Hadri — 2ème restaurant',
+  (30, 'ELSA DELICE', '39 Rue Nationale', '30000', 'Nîmes', 13, 2, 0,
+   '2026-03-20', 1, 'RIFI-LOUTFI', 'Fatine', 'biggburgerf@atomicmail.io',
+   'Sabrina — TRANCHE 1 / R2. Mot de passe : Dropeat@2026. Plateforme Uber : https://shorturl.at/VwkUM.',
    '2026-03-20 11:00:00', '2026-03-20 11:00:00');
 
 -- Gregory Hadri (user_id = 22) — 2 restos
-INSERT OR IGNORE INTO restaurants
-  (id, nom, adresse, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
-   date_signature, actif, gerant_nom, gerant_prenom, notes,
+INSERT INTO restaurants
+  (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
+   date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
 VALUES
-  (31, 'Restaurant Gregory #1', 'Adresse Gregory 1', NULL, 22, 1, 0,
-   '2026-03-05', 1, 'Hadri', 'Gregory',
-   'Apport Gregory Hadri — 1er restaurant',
+  (31, 'CAVERNE A PIZZA', '27 Rue Raymond Marcheron', '92170', 'Vanves', 22, 1, 0,
+   '2026-03-05', 1, 'BOZLUR', 'ROHOMAN', 'caverneapizza@protonmail.com',
+   'Greg — TRANCHE 1 / R1. Mot de passe : Dropeat@2026. Plateforme Uber : https://urlr.me/KY4pG7.',
    '2026-03-05 11:00:00', '2026-03-05 11:00:00'),
-  (32, 'Restaurant Gregory #2', 'Adresse Gregory 2', NULL, 22, 2, 0,
-   '2026-03-25', 1, 'Hadri', 'Gregory',
-   'Apport Gregory Hadri — 2ème restaurant',
+  (32, 'BENASTA', '46 Rue de Villacoublay', '78140', 'Vélizy-Villacoublay', 22, 2, 0,
+   '2026-03-25', 1, 'ATTAR', 'Nassima', 'benastracouscous@protonmail.com',
+   'Greg — TRANCHE 1 / R2. Mot de passe : Dropeat@2026.',
    '2026-03-25 11:00:00', '2026-03-25 11:00:00');
 
 -- Fabien Rosso (user_id = 20) — 2 restos
-INSERT OR IGNORE INTO restaurants
-  (id, nom, adresse, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
-   date_signature, actif, gerant_nom, gerant_prenom, notes,
+INSERT INTO restaurants
+  (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
+   date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
 VALUES
-  (33, 'Restaurant Fabien #1', 'Adresse Fabien 1', NULL, 20, 1, 0,
-   '2026-03-10', 1, 'Rosso', 'Fabien',
-   'Apport Fabien Rosso — 1er restaurant',
+  (33, 'Le Grill System', '1 Avenue des Olives', '13013', 'Marseille', 20, 1, 0,
+   '2026-03-10', 1, 'AHMADZAI', 'Munir', 'grillfoodmars@protonmail.com',
+   'Fabien — TRANCHE 1 / R1. Région : Provence-Alpes-Côte d''Azur. Mot de passe : Dropeat@2026. Plateforme Uber : https://shorturl.at/brRib.',
    '2026-03-10 11:00:00', '2026-03-10 11:00:00'),
-  (34, 'Restaurant Fabien #2', 'Adresse Fabien 2', NULL, 20, 2, 0,
-   '2026-04-01', 1, 'Rosso', 'Fabien',
-   'Apport Fabien Rosso — 2ème restaurant',
+  (34, 'Istanbul Kebab', '179 Avenue de la Rose', '13013', 'Marseille', 20, 2, 0,
+   '2026-04-01', 1, 'OZEL', 'Deniz', 'ezomarseille13@protonmail.com',
+   'Fabien — TRANCHE 1 / R2. Mot de passe : Dropeat@2026. Plateforme Uber.',
    '2026-04-01 11:00:00', '2026-04-01 11:00:00');
 
--- Elbac Haidar Mohamed (user_id = 21) — 1 resto : LK
-INSERT OR IGNORE INTO restaurants
-  (id, nom, adresse, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
-   date_signature, actif, gerant_nom, gerant_prenom, notes,
+-- Elbac Haidar Mohamed (user_id = 21) — 1 resto
+INSERT INTO restaurants
+  (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
+   date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
 VALUES
-  (35, 'LK', 'Adresse LK', NULL, 21, 1, 0,
-   '2026-03-15', 1, 'Haidar Mohamed', 'Elbac',
-   'Apport Elbac Haidar Mohamed — 1er restaurant',
+  (35, 'LK', '38 Avenue Robert Buron', '53000', 'Laval', 21, 1, 0,
+   '2026-03-15', 1, 'LAMJED', 'Riadh', 'lk53000@protonmail.com',
+   'Elbac — TRANCHE 1 / R1. Email Uber : byouss1@ext.uber.com. Mot de passe : Dropeat@2026. Plateforme Uber.',
    '2026-03-15 11:00:00', '2026-03-15 11:00:00');
 
 -- ============================================================
--- 3. MARQUES VIRTUELLES (Uber Eats) — toutes AVANT le challenge
+-- 3. MARQUES VIRTUELLES (Uber Eats) — données RÉELLES
 -- ============================================================
--- IDs 9..27
--- Pour Sébastien : 5 premières marques + 5e (Krock Takos dans O'Grill) = portefeuille 100%
--- À partir de Sultant Restaurant : règle 5/5 marques également suspendue
+-- Note : Le champ "commission_info" et "acces_operationnels" stockent
+-- les codes Google Authenticator (TOTP 2FA) + mots de passe + URLs Uber.
 -- ============================================================
-INSERT OR IGNORE INTO marques_virtuelles
+
+-- SÉBASTIEN — TRANCHE 1 marques
+-- Resto O'Grill (id=17) a DEUX marques : Pizza Nostra + Krock Takos (5e portefeuille)
+INSERT INTO marques_virtuelles
   (id, restaurant_id, nom, plateforme, rang_creation, is_portefeuille_proprietaire,
-   date_lancement, actif, statut_marque, exclue_tranche, notes,
+   date_lancement, actif, statut_marque, exclue_tranche,
+   uber_manager_email, uber_manager_password, uber_manager_url,
+   commission_info, acces_operationnels, notes,
    created_at, updated_at)
 VALUES
-  -- Sébastien — tranche 1 marques (positions 1..5 — 5e = portefeuille 100%)
-  (9,  17, 'Marque SG1',   'uber_eats', 1, 0, '2026-01-25', 1, 'active', 0,
-   'Marque Sébastien #1 — avant challenge', '2026-01-25 10:00:00', '2026-01-25 10:00:00'),
-  (10, 18, 'Marque SG2',   'uber_eats', 1, 0, '2026-02-05', 1, 'active', 0,
-   'Marque Sébastien #2 — avant challenge', '2026-02-05 10:00:00', '2026-02-05 10:00:00'),
-  (11, 19, 'Marque SG3',   'uber_eats', 1, 0, '2026-02-20', 1, 'active', 0,
-   'Marque Sébastien #3 — avant challenge', '2026-02-20 10:00:00', '2026-02-20 10:00:00'),
-  (12, 20, 'Marque SG4',   'uber_eats', 1, 0, '2026-03-05', 1, 'active', 0,
-   'Marque Sébastien #4 — avant challenge', '2026-03-05 10:00:00', '2026-03-05 10:00:00'),
-  (13, 21, 'Krock Takos',  'uber_eats', 1, 1, '2026-03-15', 1, 'portefeuille', 0,
-   '5ème marque choisie par Sébastien pour son portefeuille personnel (dans O''Grill) — règle 5/5 standard',
-   '2026-03-15 10:00:00', '2026-03-15 10:00:00'),
-  -- Sébastien — tranche 2 marques (à partir de Sultant — règle suspendue)
-  (14, 22, 'Sultant',      'uber_eats', 1, 0, '2026-03-25', 1, 'active', 0,
-   'Marque Sultant Restaurant — début de la suspension règle 5/5 (challenge)',
+  (9, 17, 'Pizza Nostra', 'uber_eats', 1, 0, '2026-01-25', 1, 'active', 0,
+   'cahitdrop@atomicmail.io', 'Dropeat2026@', 'https://urls.fr/Fjz5KE',
+   'TOTP 2FA : S6AHWDWW3PP7BNWQIFNYHBMKCXH4ZXVE', 'O''Grill — Marque principale',
+   'Sébastien — TRANCHE 1 marque #1 (dans O''Grill)',
+   '2026-01-25 10:00:00', '2026-01-25 10:00:00'),
+  (10, 18, 'BB HOT BURGER', 'uber_eats', 1, 0, '2026-02-05', 1, 'active', 0,
+   'imanecher@atomicmail.io', 'Dropeat@2026', 'https://urlr.me/fGDxEN',
+   'TOTP 2FA : HPUD36SBJYENIBXSIKPID52RV5CAD3PL',
+   'Email secondaire : coversip.business@gmail.com',
+   'Sébastien — TRANCHE 1 marque #2 (dans Taco 19)',
+   '2026-02-05 10:00:00', '2026-02-05 10:00:00'),
+  (11, 19, 'BB GOOD BURGER', 'uber_eats', 1, 0, '2026-02-20', 1, 'active', 0,
+   'lailakamel@atomicmail.io', 'Dropeat@2026', 'https://urls.fr/VLvgOf',
+   'TOTP 2FA : 6DGQEGKCHCVVRCX2HD3NEN5XIK7ZDBQF + LVUASTPUL42ROYWFQQW3MN4ZBLQYNXZG',
+   'Email secondaire : robertsannaofficiel@gmail.com',
+   'Sébastien — TRANCHE 1 marque #3 (dans BIGG BURGER30)',
+   '2026-02-20 10:00:00', '2026-02-20 10:00:00'),
+  (12, 20, 'Palais d''Or Poulet et Riz', 'uber_eats', 1, 0, '2026-03-05', 1, 'active', 0,
+   'shahzadajmal@atomicmail.io', 'Dropeat@2026', 'https://urls.fr/98BBnc',
+   'TOTP 2FA : OKVVL2TTMFV443MR3HKJPRXZ7OQGVPX6 + K6UXRG2PA6VA5OFXUR7XT6MNM5LZRHF6',
+   'Email secondaire : juliapaya361@gmail.com',
+   'Sébastien — TRANCHE 1 marque #4 (dans GUJJAR)',
+   '2026-03-05 10:00:00', '2026-03-05 10:00:00'),
+  -- 5e MARQUE PORTEFEUILLE 100% (règle 5/5 standard) = Krock Takos
+  (13, 17, 'Krock Takos', 'uber_eats', 2, 1, '2026-03-15', 1, 'portefeuille', 0,
+   'CIFTCIKROC@proton.me', 'Dropeat@2026', 'https://urls.fr/Fjz5KE',
+   'TOTP 2FA : S6AHWDWW3PP7BNWQIFNYHBMKCXH4ZXVE',
+   'Seconde marque dans O''Grill — 5e MARQUE PORTEFEUILLE PERSONNEL 100% AGENT (règle 5/5 standard)',
+   'Sébastien — TRANCHE 1 marque #5 = PORTEFEUILLE PERSONNEL 100%',
+   '2026-03-15 10:00:00', '2026-03-15 10:00:00');
+
+-- SÉBASTIEN — TRANCHE 2 marques (règle 5/5 SUSPENDUE à partir de Sultant)
+INSERT INTO marques_virtuelles
+  (id, restaurant_id, nom, plateforme, rang_creation, is_portefeuille_proprietaire,
+   date_lancement, actif, statut_marque, exclue_tranche,
+   uber_manager_email, uber_manager_password, uber_manager_url,
+   commission_info, acces_operationnels, notes,
+   created_at, updated_at)
+VALUES
+  (14, 22, 'Naanwich Burger Montpellier', 'uber_eats', 1, 0, '2026-03-25', 1, 'active', 0,
+   'citybrunch@protonmail.com', 'Dropeat@2026', NULL,
+   'TOTP 2FA : K4C3S2ODECZ6JH3IGZOGI5S4M6NJU67S', NULL,
+   'Sébastien — TRANCHE 2 marque #1 (dans CITY BRUNCH)',
    '2026-03-25 10:00:00', '2026-03-25 10:00:00'),
-  (15, 23, 'Marque SG7',   'uber_eats', 1, 0, '2026-04-05', 1, 'active', 0,
-   'Marque Sébastien #7 — règle 5/5 suspendue', '2026-04-05 10:00:00', '2026-04-05 10:00:00'),
-  (16, 24, 'Marque SG8',   'uber_eats', 1, 0, '2026-04-15', 1, 'active', 0,
-   'Marque Sébastien #8 — règle 5/5 suspendue', '2026-04-15 10:00:00', '2026-04-15 10:00:00'),
-  (17, 25, 'Marque SG9',   'uber_eats', 1, 0, '2026-04-22', 1, 'active', 0,
-   'Marque Sébastien #9 — règle 5/5 suspendue', '2026-04-22 10:00:00', '2026-04-22 10:00:00'),
-  (18, 26, 'Marque SG10',  'uber_eats', 1, 0, '2026-04-29', 1, 'active', 0,
-   'Marque Sébastien #10 — règle 5/5 suspendue', '2026-04-29 10:00:00', '2026-04-29 10:00:00'),
-  -- Autres commerciaux : 1 marque par restaurant
-  (19, 27, 'Meal N Food',          'uber_eats', 1, 0, '2026-02-18', 1, 'active', 0,
-   'Marque Kamel Mehdi', '2026-02-18 11:00:00', '2026-02-18 11:00:00'),
-  (20, 28, 'Malabar Foods',        'uber_eats', 1, 0, '2026-02-23', 1, 'active', 0,
-   'Marque Hamou OULD BESSI', '2026-02-23 11:00:00', '2026-02-23 11:00:00'),
-  (21, 29, 'Marque Sabrina #1',    'uber_eats', 1, 0, '2026-03-05', 1, 'active', 0,
-   'Marque Sabrina Hadri #1', '2026-03-05 11:00:00', '2026-03-05 11:00:00'),
-  (22, 30, 'Marque Sabrina #2',    'uber_eats', 1, 0, '2026-03-25', 1, 'active', 0,
-   'Marque Sabrina Hadri #2', '2026-03-25 11:00:00', '2026-03-25 11:00:00'),
-  (23, 31, 'Marque Gregory #1',    'uber_eats', 1, 0, '2026-03-10', 1, 'active', 0,
-   'Marque Gregory Hadri #1', '2026-03-10 11:00:00', '2026-03-10 11:00:00'),
-  (24, 32, 'Marque Gregory #2',    'uber_eats', 1, 0, '2026-03-30', 1, 'active', 0,
-   'Marque Gregory Hadri #2', '2026-03-30 11:00:00', '2026-03-30 11:00:00'),
-  (25, 33, 'Marque Fabien #1',     'uber_eats', 1, 0, '2026-03-15', 1, 'active', 0,
-   'Marque Fabien Rosso #1', '2026-03-15 11:00:00', '2026-03-15 11:00:00'),
-  (26, 34, 'Marque Fabien #2',     'uber_eats', 1, 0, '2026-04-05', 1, 'active', 0,
-   'Marque Fabien Rosso #2', '2026-04-05 11:00:00', '2026-04-05 11:00:00'),
-  (27, 35, 'LK',                   'uber_eats', 1, 0, '2026-03-18', 1, 'active', 0,
-   'Marque Elbac Haidar Mohamed — LK', '2026-03-18 11:00:00', '2026-03-18 11:00:00');
+  (15, 23, 'Gare au Panini Nîmes', 'uber_eats', 1, 0, '2026-04-05', 1, 'active', 0,
+   'le100witch@atomicmail.io', 'Dropeat@2026', 'https://urli.info/1tYPY',
+   'TOTP 2FA : 5EQOOTHEEGZCA7RGXFYGSGMKFRGPXMCA', NULL,
+   'Sébastien — TRANCHE 2 marque #2 (dans Le 100dwich)',
+   '2026-04-05 10:00:00', '2026-04-05 10:00:00'),
+  -- Seconde marque dans BIGG BURGER30
+  (16, 19, 'Kroc Arena Nîmes', 'uber_eats', 2, 0, '2026-04-08', 1, 'active', 0,
+   'krocarenanimes@proton.me', 'Dropeat@2026', 'https://urls.fr/VLvgOf',
+   'TOTP 2FA : MBR45RY2OHTPSCMDR7FRBYKOBELB4SQV',
+   'Seconde marque dans BIGG BURGER30',
+   'Sébastien — TRANCHE 2 marque #3 (2e marque dans BIGG BURGER30)',
+   '2026-04-08 10:00:00', '2026-04-08 10:00:00'),
+  (17, 24, 'Ma Pizza Bangers', 'uber_eats', 1, 0, '2026-04-15', 1, 'active', 0,
+   'solarimpulse.game@gmail.com', 'Dropeat@2026', NULL,
+   'TOTP 2FA : DJ5ZLUWQTNUX52DRA2ZSX2FDVQXVNQAB', NULL,
+   'Sébastien — TRANCHE 2 marque #4 (dans SMASHOW)',
+   '2026-04-15 10:00:00', '2026-04-15 10:00:00'),
+  -- Sultant Restaurant — DÉBUT SUSPENSION règle 5/5
+  (18, 25, 'Kroc Takos — Le Gras C''Est La Vie', 'uber_eats', 1, 0, '2026-04-22', 1, 'active', 0,
+   'sultant34@protonmail.com', 'Dropeat@2026', 'https://urls.fr/UTxE2t',
+   'TOTP 2FA : RDZP-Y5ZR-ECJT-Y4OC-IWJU-ISPT-5MF7-UL55',
+   'DÉBUT de la SUSPENSION règle 5/5 par le challenge CH-2026-05-SEBASTIAN-30R',
+   'Sébastien — TRANCHE 2 marque #5 (Sultant) — règle 5/5 SUSPENDUE',
+   '2026-04-22 10:00:00', '2026-04-22 10:00:00'),
+  (19, 26, 'BB GOOD BURGER Salon-de-Provence', 'uber_eats', 1, 0, '2026-04-29', 1, 'active', 0,
+   'chezleboss@protonmail.com', 'Dropeat@2026', 'https://urlr.me/B9G7xN',
+   'TOTP 2FA : 7TPT-7BVJ-KRRQ-R67J-D73R-QMP2-GCY5-ECMA', NULL,
+   'Sébastien — TRANCHE 2 marque #6 (dans CHEZLEBOSS) — règle 5/5 SUSPENDUE',
+   '2026-04-29 10:00:00', '2026-04-29 10:00:00'),
+  -- Seconde marque dans Taco 19
+  (20, 18, 'BANGER TAKOS NÎMES', 'uber_eats', 2, 0, '2026-04-30', 1, 'active', 0,
+   'bangertakos@proton.me', 'Dropeat@2026', 'https://urlr.me/fGDxEN',
+   'TOTP 2FA : YGRTS44SCQQNAHTYMIYKAGY6HCKP43NI',
+   'Seconde marque dans Taco 19. Email secondaire : coversip.business@gmail.com',
+   'Sébastien — TRANCHE 2 marque #7 (2e marque dans Taco 19) — règle 5/5 SUSPENDUE',
+   '2026-04-30 10:00:00', '2026-04-30 10:00:00');
+
+-- MARQUES DES AUTRES COMMERCIAUX
+INSERT INTO marques_virtuelles
+  (id, restaurant_id, nom, plateforme, rang_creation, is_portefeuille_proprietaire,
+   date_lancement, actif, statut_marque, exclue_tranche,
+   uber_manager_email, uber_manager_password, uber_manager_url,
+   commission_info, acces_operationnels, notes,
+   created_at, updated_at)
+VALUES
+  -- Kamel
+  (21, 27, 'BB GOOD BURGER Valence', 'uber_eats', 1, 0, '2026-02-18', 1, 'active', 0,
+   'merzougbrice@atomicmail.io', 'Dropeat@2026', 'https://urls.fr/JjQqBuu',
+   'TOTP 2FA : NQDJNOVHWVBBD2KD3JNACGMLNGQWQIPU',
+   'Email secondaire : arricaltd@gmail.com',
+   'Kamel — TRANCHE 1 marque #1',
+   '2026-02-18 11:00:00', '2026-02-18 11:00:00'),
+  -- Hamou
+  (22, 28, 'BB GOOD BURGER DIJON', 'uber_eats', 1, 0, '2026-02-23', 1, 'active', 0,
+   'malabarfood@protonmail.com', 'Dropeat@2026', 'https://sl1nk.com/l8itfvu',
+   'TOTP 2FA : 3C2GME6VTPF7FTGYSEUMIZIPLPGLJHK2', NULL,
+   'Hamou — TRANCHE 1 marque #1',
+   '2026-02-23 11:00:00', '2026-02-23 11:00:00'),
+  -- Sabrina
+  (23, 29, 'Burgerignos Nîmes', 'uber_eats', 1, 0, '2026-03-05', 1, 'active', 0,
+   'taibimounia@protonmail.com', 'Dropeat@2026', 'https://sl1nk.com/qge11h5',
+   'TOTP 2FA : SLW4WBTJYUNZQSDFFJVNIZ6IAZB6FSA5', NULL,
+   'Sabrina — TRANCHE 1 marque #1',
+   '2026-03-05 11:00:00', '2026-03-05 11:00:00'),
+  (24, 30, 'Kroc Burgers Nîmes', 'uber_eats', 1, 0, '2026-03-25', 1, 'active', 0,
+   'biggburgerf@atomicmail.io', 'Dropeat@2026', 'https://shorturl.at/VwkUM',
+   'TOTP 2FA : AKPTBNUPUIGJELXBOJ2V7SB4KS3NSZYB',
+   'Restaurant Virtuel',
+   'Sabrina — TRANCHE 1 marque #2',
+   '2026-03-25 11:00:00', '2026-03-25 11:00:00'),
+  -- Greg
+  (25, 31, 'Pizza Banger', 'uber_eats', 1, 0, '2026-03-10', 1, 'active', 0,
+   'caverneapizza@protonmail.com', 'Dropeat@2026', 'https://urlr.me/KY4pG7',
+   'TOTP 2FA : VKMLRHXMDCSO53LXYEEWF6FJ72XNS262', NULL,
+   'Greg — TRANCHE 1 marque #1',
+   '2026-03-10 11:00:00', '2026-03-10 11:00:00'),
+  (26, 32, 'Maison Nassima', 'uber_eats', 1, 0, '2026-03-30', 1, 'active', 0,
+   'benastracouscous@protonmail.com', 'Dropeat@2026', NULL,
+   'TOTP 2FA : SC3FY6ANK2U2YDWVKKDT3P2TKJWANH2E', NULL,
+   'Greg — TRANCHE 1 marque #2',
+   '2026-03-30 11:00:00', '2026-03-30 11:00:00'),
+  -- Fabien
+  (27, 33, 'Gros Croc Marseille', 'uber_eats', 1, 0, '2026-03-15', 1, 'active', 0,
+   'grillfoodmars@protonmail.com', 'Dropeat@2026', 'https://shorturl.at/brRib',
+   'TOTP 2FA : 7LWFB5BO6OP77N37J6YLSOLS6HR2CL2V', NULL,
+   'Fabien — TRANCHE 1 marque #1',
+   '2026-03-15 11:00:00', '2026-03-15 11:00:00'),
+  (28, 34, 'Kroc Takos Marseille', 'uber_eats', 1, 0, '2026-04-05', 1, 'active', 0,
+   'ezomarseille13@protonmail.com', 'Dropeat@2026', NULL,
+   NULL, NULL,
+   'Fabien — TRANCHE 1 marque #2',
+   '2026-04-05 11:00:00', '2026-04-05 11:00:00'),
+  -- Elbac
+  (29, 35, 'BB GOOD BURGER LAVAL', 'uber_eats', 1, 0, '2026-03-18', 1, 'active', 0,
+   'lk53000@protonmail.com', 'Dropeat@2026', NULL,
+   NULL, 'Email Uber : byouss1@ext.uber.com',
+   'Elbac — TRANCHE 1 marque #1',
+   '2026-03-18 11:00:00', '2026-03-18 11:00:00');
 
 -- ============================================================
 -- 4. TRANCHES FERMÉES DE SÉBASTIEN (user_id = 14)
 -- ============================================================
--- Tranche 1 client : restos 17..21 — CLÔTURÉE (5e = O'Grill attribué portefeuille)
--- Tranche 2 client : restos 22..26 — OUVERTE (5e PAS attribué : règle suspendue par challenge)
--- Tranche 1 marque : marques 9..13 — CLÔTURÉE (5e = Krock Takos attribué portefeuille)
--- Tranche 2 marque : marques 14..18 — OUVERTE (5e PAS attribué : règle suspendue)
+-- TRANCHE 1 client : restos 17..21 — CLÔTURÉE (5e = La Corniche portefeuille)
+-- TRANCHE 2 client : restos 22..26 — OUVERTE (règle 5/5 suspendue à partir de Sultant)
+-- TRANCHE 1 marque : marques 9..13 — CLÔTURÉE (5e = Krock Takos portefeuille)
+-- TRANCHE 2 marque : marques 14..20 — OUVERTE (règle suspendue)
 -- ============================================================
-INSERT OR IGNORE INTO tranches_attribution
+INSERT INTO tranches_attribution
   (id, agent_id, type, numero_tranche, date_ouverture, date_cloture, statut,
    element_attribue_id, validation_ecrite, notes)
 VALUES
-  (1, 14, 'client', 1, '2026-01-20 10:00:00', '2026-03-10 10:00:00', 'cloturee',
-   21, 1, 'Tranche 1 client Sébastien — 5e resto O''Grill attribué portefeuille 100% (règle 5/5 standard)'),
-  (2, 14, 'client', 2, '2026-03-20 10:00:00', NULL, 'ouverte',
-   NULL, 0, 'Tranche 2 client Sébastien — commence à Sultant Restaurant. La règle 5/5 est SUSPENDUE par le challenge CH-2026-05-SEBASTIAN-30R, donc le 5e resto ne déclenche PAS d''attribution automatique.'),
-  (3, 14, 'marque', 1, '2026-01-25 10:00:00', '2026-03-15 10:00:00', 'cloturee',
-   13, 1, 'Tranche 1 marque Sébastien — 5e marque Krock Takos (dans O''Grill) attribuée portefeuille 100%'),
-  (4, 14, 'marque', 2, '2026-03-25 10:00:00', NULL, 'ouverte',
-   NULL, 0, 'Tranche 2 marque Sébastien — commence à Sultant. Règle 5/5 SUSPENDUE par challenge.');
+  (101, 14, 'client', 1, '2026-01-20 10:00:00', '2026-03-10 10:00:00', 'cloturee',
+   21, 1, 'Tranche 1 client Sébastien — 5e resto La Corniche = PORTEFEUILLE CLIENT 100% (règle 5/5 standard)'),
+  (102, 14, 'client', 2, '2026-03-20 10:00:00', NULL, 'ouverte',
+   NULL, 0, 'Tranche 2 client Sébastien — Sultant Restaurant marque le DÉBUT de la SUSPENSION règle 5/5 par challenge CH-2026-05-SEBASTIAN-30R. Pas d''attribution automatique sur le 5e.'),
+  (103, 14, 'marque', 1, '2026-01-25 10:00:00', '2026-03-15 10:00:00', 'cloturee',
+   13, 1, 'Tranche 1 marque Sébastien — 5e marque Krock Takos (dans O''Grill) = PORTEFEUILLE MARQUE PERSONNEL 100%'),
+  (104, 14, 'marque', 2, '2026-03-25 10:00:00', NULL, 'ouverte',
+   NULL, 0, 'Tranche 2 marque Sébastien — Sultant marque le DÉBUT de la SUSPENSION règle 5/5');
 
--- Éléments des tranches (UNIQUE agent_id, type, element_id)
-INSERT OR IGNORE INTO tranche_elements
+-- Éléments des tranches Sébastien
+INSERT INTO tranche_elements
   (tranche_id, agent_id, type, element_id, position_dans_tranche, is_attribution, date_qualification, notes)
 VALUES
   -- Tranche 1 client (restos 17..21) — clôturée
-  (1, 14, 'client', 17, 1, 0, '2026-01-20 10:00:00', 'Position 1'),
-  (1, 14, 'client', 18, 2, 0, '2026-02-01 10:00:00', 'Position 2'),
-  (1, 14, 'client', 19, 3, 0, '2026-02-15 10:00:00', 'Position 3'),
-  (1, 14, 'client', 20, 4, 0, '2026-03-01 10:00:00', 'Position 4'),
-  (1, 14, 'client', 21, 5, 1, '2026-03-10 10:00:00', 'Position 5 = ATTRIBUTION (O''Grill)'),
-  -- Tranche 2 client (restos 22..26) — ouverte (5e PAS attribué)
-  (2, 14, 'client', 22, 1, 0, '2026-03-20 10:00:00', 'Position 1 (Sultant Restaurant — début règle suspendue)'),
-  (2, 14, 'client', 23, 2, 0, '2026-04-01 10:00:00', 'Position 2 (règle suspendue)'),
-  (2, 14, 'client', 24, 3, 0, '2026-04-10 10:00:00', 'Position 3 (règle suspendue)'),
-  (2, 14, 'client', 25, 4, 0, '2026-04-20 10:00:00', 'Position 4 (règle suspendue)'),
-  (2, 14, 'client', 26, 5, 0, '2026-04-28 10:00:00', 'Position 5 — règle 5/5 SUSPENDUE : PAS d''attribution automatique'),
+  (101, 14, 'client', 17, 1, 0, '2026-01-20 10:00:00', 'Position 1 — O''Grill'),
+  (101, 14, 'client', 18, 2, 0, '2026-02-01 10:00:00', 'Position 2 — Taco 19'),
+  (101, 14, 'client', 19, 3, 0, '2026-02-15 10:00:00', 'Position 3 — BIGG BURGER30'),
+  (101, 14, 'client', 20, 4, 0, '2026-03-01 10:00:00', 'Position 4 — GUJJAR'),
+  (101, 14, 'client', 21, 5, 1, '2026-03-10 10:00:00', 'Position 5 = ATTRIBUTION (La Corniche)'),
+  -- Tranche 2 client (restos 22..26) — ouverte
+  (102, 14, 'client', 22, 1, 0, '2026-03-20 10:00:00', 'Position 1 — CITY BRUNCH'),
+  (102, 14, 'client', 23, 2, 0, '2026-04-01 10:00:00', 'Position 2 — Le 100dwich'),
+  (102, 14, 'client', 24, 3, 0, '2026-04-10 10:00:00', 'Position 3 — SMASHOW'),
+  (102, 14, 'client', 25, 4, 0, '2026-04-20 10:00:00', 'Position 4 — Sultant Restaurant (DÉBUT SUSPENSION règle 5/5)'),
+  (102, 14, 'client', 26, 5, 0, '2026-04-28 10:00:00', 'Position 5 — CHEZLEBOSS — règle 5/5 SUSPENDUE : PAS d''attribution'),
   -- Tranche 1 marque (marques 9..13) — clôturée
-  (3, 14, 'marque',  9, 1, 0, '2026-01-25 10:00:00', 'Position 1'),
-  (3, 14, 'marque', 10, 2, 0, '2026-02-05 10:00:00', 'Position 2'),
-  (3, 14, 'marque', 11, 3, 0, '2026-02-20 10:00:00', 'Position 3'),
-  (3, 14, 'marque', 12, 4, 0, '2026-03-05 10:00:00', 'Position 4'),
-  (3, 14, 'marque', 13, 5, 1, '2026-03-15 10:00:00', 'Position 5 = ATTRIBUTION (Krock Takos)'),
-  -- Tranche 2 marque (marques 14..18) — ouverte (5e PAS attribué)
-  (4, 14, 'marque', 14, 1, 0, '2026-03-25 10:00:00', 'Position 1 (Sultant — règle suspendue)'),
-  (4, 14, 'marque', 15, 2, 0, '2026-04-05 10:00:00', 'Position 2 (règle suspendue)'),
-  (4, 14, 'marque', 16, 3, 0, '2026-04-15 10:00:00', 'Position 3 (règle suspendue)'),
-  (4, 14, 'marque', 17, 4, 0, '2026-04-22 10:00:00', 'Position 4 (règle suspendue)'),
-  (4, 14, 'marque', 18, 5, 0, '2026-04-29 10:00:00', 'Position 5 — règle 5/5 SUSPENDUE : PAS d''attribution automatique');
+  (103, 14, 'marque',  9, 1, 0, '2026-01-25 10:00:00', 'Position 1 — Pizza Nostra'),
+  (103, 14, 'marque', 10, 2, 0, '2026-02-05 10:00:00', 'Position 2 — BB HOT BURGER'),
+  (103, 14, 'marque', 11, 3, 0, '2026-02-20 10:00:00', 'Position 3 — BB GOOD BURGER'),
+  (103, 14, 'marque', 12, 4, 0, '2026-03-05 10:00:00', 'Position 4 — Palais d''Or Poulet et Riz'),
+  (103, 14, 'marque', 13, 5, 1, '2026-03-15 10:00:00', 'Position 5 = ATTRIBUTION (Krock Takos)'),
+  -- Tranche 2 marque (marques 14..20) — ouverte
+  (104, 14, 'marque', 14, 1, 0, '2026-03-25 10:00:00', 'Position 1 — Naanwich Burger Montpellier'),
+  (104, 14, 'marque', 15, 2, 0, '2026-04-05 10:00:00', 'Position 2 — Gare au Panini Nîmes'),
+  (104, 14, 'marque', 16, 3, 0, '2026-04-08 10:00:00', 'Position 3 — Kroc Arena Nîmes'),
+  (104, 14, 'marque', 17, 4, 0, '2026-04-15 10:00:00', 'Position 4 — Ma Pizza Bangers'),
+  (104, 14, 'marque', 18, 5, 0, '2026-04-22 10:00:00', 'Position 5 — Kroc Takos Sultant (DÉBUT SUSPENSION) — règle 5/5 SUSPENDUE'),
+  (104, 14, 'marque', 19, 6, 0, '2026-04-29 10:00:00', 'Position 6 — BB GOOD BURGER Salon-de-Provence — règle suspendue'),
+  (104, 14, 'marque', 20, 7, 0, '2026-04-30 10:00:00', 'Position 7 — BANGER TAKOS NÎMES — règle suspendue');
 
 -- ============================================================
--- 5. TRANCHES POUR LES AUTRES COMMERCIAUX (ouvertes, pas de 5e)
+-- 5. TRANCHES POUR LES AUTRES COMMERCIAUX (ouvertes)
 -- ============================================================
-INSERT OR IGNORE INTO tranches_attribution
+INSERT INTO tranches_attribution
   (id, agent_id, type, numero_tranche, date_ouverture, date_cloture, statut,
    element_attribue_id, validation_ecrite, notes)
 VALUES
-  (5, 12, 'client', 1, '2026-02-15 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 Kamel Mehdi'),
-  (6, 29, 'client', 1, '2026-02-20 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 Hamou OULD BESSI'),
-  (7, 13, 'client', 1, '2026-03-01 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 Sabrina Hadri'),
-  (8, 22, 'client', 1, '2026-03-05 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 Gregory Hadri'),
-  (9, 20, 'client', 1, '2026-03-10 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 Fabien Rosso'),
-  (10, 21, 'client', 1, '2026-03-15 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 Elbac Haidar Mohamed');
+  -- Tranches client
+  (105, 12, 'client', 1, '2026-02-15 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 client Kamel Mehdi'),
+  (106, 29, 'client', 1, '2026-02-20 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 client Hamou OULD BESSI'),
+  (107, 13, 'client', 1, '2026-03-01 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 client Sabrina Hadri'),
+  (108, 22, 'client', 1, '2026-03-05 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 client Gregory Hadri'),
+  (109, 20, 'client', 1, '2026-03-10 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 client Fabien Rosso'),
+  (110, 21, 'client', 1, '2026-03-15 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 client Elbac Haidar Mohamed'),
+  -- Tranches marque
+  (111, 12, 'marque', 1, '2026-02-18 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Kamel Mehdi'),
+  (112, 29, 'marque', 1, '2026-02-23 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Hamou OULD BESSI'),
+  (113, 13, 'marque', 1, '2026-03-05 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Sabrina Hadri'),
+  (114, 22, 'marque', 1, '2026-03-10 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Gregory Hadri'),
+  (115, 20, 'marque', 1, '2026-03-15 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Fabien Rosso'),
+  (116, 21, 'marque', 1, '2026-03-18 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Elbac Haidar Mohamed');
 
-INSERT OR IGNORE INTO tranche_elements
+INSERT INTO tranche_elements
   (tranche_id, agent_id, type, element_id, position_dans_tranche, is_attribution, date_qualification, notes)
 VALUES
-  -- Kamel Mehdi : 1 resto + 1 marque
-  (5, 12, 'client', 27, 1, 0, '2026-02-15 11:00:00', 'MEAL N. FOOD — position 1'),
-  -- Hamou OULD BESSI : 1 resto + 1 marque
-  (6, 29, 'client', 28, 1, 0, '2026-02-20 11:00:00', 'MALABAR FOODS — position 1'),
-  -- Sabrina Hadri : 2 restos
-  (7, 13, 'client', 29, 1, 0, '2026-03-01 11:00:00', 'Position 1'),
-  (7, 13, 'client', 30, 2, 0, '2026-03-20 11:00:00', 'Position 2'),
-  -- Gregory Hadri : 2 restos
-  (8, 22, 'client', 31, 1, 0, '2026-03-05 11:00:00', 'Position 1'),
-  (8, 22, 'client', 32, 2, 0, '2026-03-25 11:00:00', 'Position 2'),
-  -- Fabien Rosso : 2 restos
-  (9, 20, 'client', 33, 1, 0, '2026-03-10 11:00:00', 'Position 1'),
-  (9, 20, 'client', 34, 2, 0, '2026-04-01 11:00:00', 'Position 2'),
-  -- Elbac Haidar Mohamed : 1 resto LK
-  (10, 21, 'client', 35, 1, 0, '2026-03-15 11:00:00', 'LK — position 1');
-
--- Tranches marques pour les autres commerciaux
-INSERT OR IGNORE INTO tranches_attribution
-  (id, agent_id, type, numero_tranche, date_ouverture, date_cloture, statut,
-   element_attribue_id, validation_ecrite, notes)
-VALUES
-  (11, 12, 'marque', 1, '2026-02-18 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Kamel Mehdi'),
-  (12, 29, 'marque', 1, '2026-02-23 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Hamou OULD BESSI'),
-  (13, 13, 'marque', 1, '2026-03-05 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Sabrina Hadri'),
-  (14, 22, 'marque', 1, '2026-03-10 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Gregory Hadri'),
-  (15, 20, 'marque', 1, '2026-03-15 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Fabien Rosso'),
-  (16, 21, 'marque', 1, '2026-03-18 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Elbac Haidar Mohamed');
-
-INSERT OR IGNORE INTO tranche_elements
-  (tranche_id, agent_id, type, element_id, position_dans_tranche, is_attribution, date_qualification, notes)
-VALUES
-  (11, 12, 'marque', 19, 1, 0, '2026-02-18 11:00:00', 'Meal N Food — position 1'),
-  (12, 29, 'marque', 20, 1, 0, '2026-02-23 11:00:00', 'Malabar Foods — position 1'),
-  (13, 13, 'marque', 21, 1, 0, '2026-03-05 11:00:00', 'Position 1'),
-  (13, 13, 'marque', 22, 2, 0, '2026-03-25 11:00:00', 'Position 2'),
-  (14, 22, 'marque', 23, 1, 0, '2026-03-10 11:00:00', 'Position 1'),
-  (14, 22, 'marque', 24, 2, 0, '2026-03-30 11:00:00', 'Position 2'),
-  (15, 20, 'marque', 25, 1, 0, '2026-03-15 11:00:00', 'Position 1'),
-  (15, 20, 'marque', 26, 2, 0, '2026-04-05 11:00:00', 'Position 2'),
-  (16, 21, 'marque', 27, 1, 0, '2026-03-18 11:00:00', 'LK — position 1');
+  -- Kamel
+  (105, 12, 'client', 27, 1, 0, '2026-02-15 11:00:00', 'MEAL N. FOOD'),
+  (111, 12, 'marque', 21, 1, 0, '2026-02-18 11:00:00', 'BB GOOD BURGER Valence'),
+  -- Hamou
+  (106, 29, 'client', 28, 1, 0, '2026-02-20 11:00:00', 'MALABAR FOODS'),
+  (112, 29, 'marque', 22, 1, 0, '2026-02-23 11:00:00', 'BB GOOD BURGER DIJON'),
+  -- Sabrina
+  (107, 13, 'client', 29, 1, 0, '2026-03-01 11:00:00', 'Brasserie du Carré St Dominique'),
+  (107, 13, 'client', 30, 2, 0, '2026-03-20 11:00:00', 'ELSA DELICE'),
+  (113, 13, 'marque', 23, 1, 0, '2026-03-05 11:00:00', 'Burgerignos Nîmes'),
+  (113, 13, 'marque', 24, 2, 0, '2026-03-25 11:00:00', 'Kroc Burgers Nîmes'),
+  -- Greg
+  (108, 22, 'client', 31, 1, 0, '2026-03-05 11:00:00', 'CAVERNE A PIZZA'),
+  (108, 22, 'client', 32, 2, 0, '2026-03-25 11:00:00', 'BENASTA'),
+  (114, 22, 'marque', 25, 1, 0, '2026-03-10 11:00:00', 'Pizza Banger'),
+  (114, 22, 'marque', 26, 2, 0, '2026-03-30 11:00:00', 'Maison Nassima'),
+  -- Fabien
+  (109, 20, 'client', 33, 1, 0, '2026-03-10 11:00:00', 'Le Grill System'),
+  (109, 20, 'client', 34, 2, 0, '2026-04-01 11:00:00', 'Istanbul Kebab'),
+  (115, 20, 'marque', 27, 1, 0, '2026-03-15 11:00:00', 'Gros Croc Marseille'),
+  (115, 20, 'marque', 28, 2, 0, '2026-04-05 11:00:00', 'Kroc Takos Marseille'),
+  -- Elbac
+  (110, 21, 'client', 35, 1, 0, '2026-03-15 11:00:00', 'LK'),
+  (116, 21, 'marque', 29, 1, 0, '2026-03-18 11:00:00', 'BB GOOD BURGER LAVAL');
 
 -- ============================================================
 -- 6. CHALLENGE Sébastien : CH-2026-05-SEBASTIAN-30R
 -- ============================================================
--- Du 1er mai au 30 juin 2026
--- Objectif : 30 restaurants apportés sur la période
--- Récompense : 15 restaurants choisis en portefeuille 100%
--- suspend_tranche_standard = 1 → règle 5/5 suspendue pendant le challenge
--- ============================================================
-INSERT OR IGNORE INTO challenges
+INSERT INTO challenges
   (id, code, nom, description,
    date_debut, date_fin,
    type_objectif, objectif_quantite,
@@ -352,17 +442,17 @@ VALUES
    1,                   -- suspend_tranche_standard
    'selection',         -- cible : uniquement les agents inscrits
    1,                   -- actif
-   'Challenge créé pour Sébastien Garcia (user_id=14). Démarrage à partir de Sultant Restaurant (resto #6) — tous les restos signés avant le 2026-05-01 ne comptent PAS dans la progression. La règle 5/5 est suspendue à partir de Sultant pour Sébastien.',
+   'Challenge créé pour Sébastien Garcia (user_id=14). RÈGLE EXCEPTIONNELLE : à partir du restaurant « Sultant Restaurant » (tranche 2 / resto 4), la règle standard 5/5 est SUSPENDUE jusqu''au 30 juin 2026. Pour les autres commerciaux, tous les restos/marques actuels sont entrés AVANT le challenge.',
    1,                   -- created_by = admin (user 1)
    '2026-04-25 09:00:00', '2026-04-25 09:00:00');
 
 -- ============================================================
 -- 7. INSCRIPTION de Sébastien (user_id = 14) dans le challenge
 -- ============================================================
-INSERT OR IGNORE INTO challenge_participations
+INSERT INTO challenge_participations
   (id, challenge_id, agent_id, statut, progression_actuelle,
    date_participation, notes_admin)
 VALUES
   (1, 1, 14, 'en_cours', 0,
    '2026-04-25 09:30:00',
-   'Sébastien Garcia inscrit dès la création du challenge. Tous ses restos actuels (10) sont signés AVANT le 2026-05-01, ils ne comptent donc pas dans la progression. Le compteur démarre à 0 et incrémentera à chaque nouveau resto signé entre le 1er mai et le 30 juin 2026.');
+   'Sébastien Garcia inscrit dès la création du challenge. Tous ses restos actuels sont signés AVANT le 2026-05-01, ils ne comptent donc pas dans la progression. Le compteur démarre à 0 et incrémentera à chaque nouveau resto signé entre le 1er mai et le 30 juin 2026.');
