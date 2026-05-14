@@ -165,6 +165,13 @@ total += dump_table("facture_lignes", order_by="facture_id")
 # 16. PAIEMENTS
 total += dump_table("paiements")
 
+# 16bis. DEMANDES DE PAIEMENT (seuil 20€, workflow demande/validation/rejet)
+# Note : on n'exporte PAS les demandes elles-mêmes (données opérationnelles
+# liées à un état de trésorerie qui n'a pas de sens en seed), seulement la
+# structure est créée par la migration 0011. Si besoin, décommenter ci-dessous.
+# total += dump_table("demandes_paiement")
+# total += dump_table("demande_paiement_commissions", order_by="demande_paiement_id")
+
 # 17. PROSPECTS
 total += dump_table("prospects")
 total += dump_table("prospect_actions", order_by="prospect_id")
