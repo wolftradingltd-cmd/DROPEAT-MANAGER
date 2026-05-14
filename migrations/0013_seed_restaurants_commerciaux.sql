@@ -19,6 +19,8 @@
 -- la règle standard 5/5 est SUSPENDUE jusqu'au 30 juin 2026.
 -- ============================================================
 
+PRAGMA defer_foreign_keys = ON;
+
 -- ============================================================
 -- 1. RESTAURANTS DE SÉBASTIEN GARCIA (user_id = 14)
 -- ============================================================
@@ -26,7 +28,7 @@
 -- Note : O'Grill apparaît UNE seule fois en tant que restaurant
 -- (avec 2 marques : Pizza Nostra + Krock Takos, la 5e marque portefeuille)
 -- ============================================================
-INSERT INTO restaurants
+INSERT OR IGNORE INTO restaurants
   (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
    date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
@@ -81,7 +83,7 @@ VALUES
 -- ============================================================
 
 -- Kamel Mehdi (user_id = 12) — 1 resto
-INSERT INTO restaurants
+INSERT OR IGNORE INTO restaurants
   (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
    date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
@@ -92,7 +94,7 @@ VALUES
    '2026-02-15 11:00:00', '2026-02-15 11:00:00');
 
 -- Hamou OULD BESSI (user_id = 29) — 1 resto
-INSERT INTO restaurants
+INSERT OR IGNORE INTO restaurants
   (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
    date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
@@ -103,7 +105,7 @@ VALUES
    '2026-02-20 11:00:00', '2026-02-20 11:00:00');
 
 -- Sabrina Hadri (user_id = 13) — 2 restos
-INSERT INTO restaurants
+INSERT OR IGNORE INTO restaurants
   (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
    date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
@@ -118,7 +120,7 @@ VALUES
    '2026-03-20 11:00:00', '2026-03-20 11:00:00');
 
 -- Gregory Hadri (user_id = 22) — 2 restos
-INSERT INTO restaurants
+INSERT OR IGNORE INTO restaurants
   (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
    date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
@@ -133,7 +135,7 @@ VALUES
    '2026-03-25 11:00:00', '2026-03-25 11:00:00');
 
 -- Fabien Rosso (user_id = 20) — 2 restos
-INSERT INTO restaurants
+INSERT OR IGNORE INTO restaurants
   (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
    date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
@@ -148,7 +150,7 @@ VALUES
    '2026-04-01 11:00:00', '2026-04-01 11:00:00');
 
 -- Elbac Haidar Mohamed (user_id = 21) — 1 resto
-INSERT INTO restaurants
+INSERT OR IGNORE INTO restaurants
   (id, nom, adresse, code_postal, ville, agent_id, rang_apport, is_portefeuille_proprietaire,
    date_signature, actif, gerant_nom, gerant_prenom, email, notes,
    created_at, updated_at)
@@ -167,7 +169,7 @@ VALUES
 
 -- SÉBASTIEN — TRANCHE 1 marques
 -- Resto O'Grill (id=17) a DEUX marques : Pizza Nostra + Krock Takos (5e portefeuille)
-INSERT INTO marques_virtuelles
+INSERT OR IGNORE INTO marques_virtuelles
   (id, restaurant_id, nom, plateforme, rang_creation, is_portefeuille_proprietaire,
    date_lancement, actif, statut_marque, exclue_tranche,
    uber_manager_email, uber_manager_password, uber_manager_url,
@@ -206,7 +208,7 @@ VALUES
    '2026-03-15 10:00:00', '2026-03-15 10:00:00');
 
 -- SÉBASTIEN — TRANCHE 2 marques (règle 5/5 SUSPENDUE à partir de Sultant)
-INSERT INTO marques_virtuelles
+INSERT OR IGNORE INTO marques_virtuelles
   (id, restaurant_id, nom, plateforme, rang_creation, is_portefeuille_proprietaire,
    date_lancement, actif, statut_marque, exclue_tranche,
    uber_manager_email, uber_manager_password, uber_manager_url,
@@ -256,7 +258,7 @@ VALUES
    '2026-04-30 10:00:00', '2026-04-30 10:00:00');
 
 -- MARQUES DES AUTRES COMMERCIAUX
-INSERT INTO marques_virtuelles
+INSERT OR IGNORE INTO marques_virtuelles
   (id, restaurant_id, nom, plateforme, rang_creation, is_portefeuille_proprietaire,
    date_lancement, actif, statut_marque, exclue_tranche,
    uber_manager_email, uber_manager_password, uber_manager_url,
@@ -325,7 +327,7 @@ VALUES
 -- TRANCHE 1 marque : marques 9..13 — CLÔTURÉE (5e = Krock Takos portefeuille)
 -- TRANCHE 2 marque : marques 14..20 — OUVERTE (règle suspendue)
 -- ============================================================
-INSERT INTO tranches_attribution
+INSERT OR IGNORE INTO tranches_attribution
   (id, agent_id, type, numero_tranche, date_ouverture, date_cloture, statut,
    element_attribue_id, validation_ecrite, notes)
 VALUES
@@ -339,7 +341,7 @@ VALUES
    NULL, 0, 'Tranche 2 marque Sébastien — Sultant marque le DÉBUT de la SUSPENSION règle 5/5');
 
 -- Éléments des tranches Sébastien
-INSERT INTO tranche_elements
+INSERT OR IGNORE INTO tranche_elements
   (tranche_id, agent_id, type, element_id, position_dans_tranche, is_attribution, date_qualification, notes)
 VALUES
   -- Tranche 1 client (restos 17..21) — clôturée
@@ -372,7 +374,7 @@ VALUES
 -- ============================================================
 -- 5. TRANCHES POUR LES AUTRES COMMERCIAUX (ouvertes)
 -- ============================================================
-INSERT INTO tranches_attribution
+INSERT OR IGNORE INTO tranches_attribution
   (id, agent_id, type, numero_tranche, date_ouverture, date_cloture, statut,
    element_attribue_id, validation_ecrite, notes)
 VALUES
@@ -391,7 +393,7 @@ VALUES
   (115, 20, 'marque', 1, '2026-03-15 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Fabien Rosso'),
   (116, 21, 'marque', 1, '2026-03-18 11:00:00', NULL, 'ouverte', NULL, 0, 'Tranche 1 marque Elbac Haidar Mohamed');
 
-INSERT INTO tranche_elements
+INSERT OR IGNORE INTO tranche_elements
   (tranche_id, agent_id, type, element_id, position_dans_tranche, is_attribution, date_qualification, notes)
 VALUES
   -- Kamel
@@ -422,7 +424,7 @@ VALUES
 -- ============================================================
 -- 6. CHALLENGE Sébastien : CH-2026-05-SEBASTIAN-30R
 -- ============================================================
-INSERT INTO challenges
+INSERT OR IGNORE INTO challenges
   (id, code, nom, description,
    date_debut, date_fin,
    type_objectif, objectif_quantite,
@@ -449,7 +451,7 @@ VALUES
 -- ============================================================
 -- 7. INSCRIPTION de Sébastien (user_id = 14) dans le challenge
 -- ============================================================
-INSERT INTO challenge_participations
+INSERT OR IGNORE INTO challenge_participations
   (id, challenge_id, agent_id, statut, progression_actuelle,
    date_participation, notes_admin)
 VALUES
