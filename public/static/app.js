@@ -826,6 +826,7 @@ async function restaurantDetailModal(id, agents) {
     </div>
 
     <div class="resto-tab-pane active" data-pane="info">
+      <div class="card-title" style="font-size:.95rem;margin-bottom:.4rem"><i class="fas fa-store"></i> Identité restaurant</div>
       <div class="form-grid mb-3">
         <div><strong>Agent :</strong> ${r.agent_nom ? escapeHtml((r.agent_prenom || '') + ' ' + r.agent_nom) : '—'}</div>
         <div><strong>Rang :</strong> #${r.rang_apport || '-'} ${r.is_portefeuille_proprietaire ? '<span class="badge badge-gold">PORTEFEUILLE</span>' : ''}</div>
@@ -841,6 +842,39 @@ async function restaurantDetailModal(id, agents) {
         </div>
         <div><strong>Compte activé :</strong> ${r.compte_active ? `<span class="badge badge-primary"><i class="fas fa-check"></i> Oui (${fmtDate(r.date_activation)})</span>` : '<span class="badge badge-slate">Non</span>'}</div>
       </div>
+
+      <div class="card-title" style="font-size:.95rem;margin:.8rem 0 .4rem"><i class="fas fa-user-tie"></i> Gérant</div>
+      <div class="form-grid mb-3">
+        <div><strong>Nom complet :</strong> ${escapeHtml(((r.gerant_prenom || '') + ' ' + (r.gerant_nom || '')).trim() || '—')}</div>
+        <div><strong>Téléphone :</strong> ${r.gerant_telephone ? `<a href="tel:${escapeHtml(r.gerant_telephone)}">${escapeHtml(r.gerant_telephone)}</a>` : '—'}</div>
+        <div><strong>Email :</strong> ${r.gerant_email ? `<a href="mailto:${escapeHtml(r.gerant_email)}">${escapeHtml(r.gerant_email)}</a>` : '—'}</div>
+      </div>
+
+      <div class="card-title" style="font-size:.95rem;margin:.8rem 0 .4rem">
+        <i class="fas fa-piggy-bank"></i> RIB manuel
+        ${r.rib_iban ? '<span class="badge badge-primary" style="font-size:.65rem;margin-left:.4rem">RENSEIGNÉ</span>' : '<span class="badge badge-warning" style="font-size:.65rem;margin-left:.4rem">À COMPLÉTER</span>'}
+      </div>
+      <div class="form-grid mb-3">
+        <div><strong>Titulaire :</strong> ${escapeHtml(r.rib_titulaire || '—')}</div>
+        <div><strong>Banque :</strong> ${escapeHtml(r.rib_banque_nom || '—')}</div>
+        <div style="grid-column:1/-1"><strong>IBAN :</strong> <code style="font-family:monospace;font-size:.85rem">${escapeHtml(r.rib_iban || '—')}</code>${r.rib_iban ? `<button class="btn btn-sm btn-link" data-copy-iban="${escapeHtml(r.rib_iban)}" title="Copier"><i class="fas fa-copy"></i></button>` : ''}</div>
+        <div><strong>BIC / SWIFT :</strong> <code style="font-family:monospace;font-size:.85rem">${escapeHtml(r.rib_bic || '—')}</code></div>
+        <div style="grid-column:1/-1"><strong>Références :</strong> ${escapeHtml(r.rib_references || '—')}</div>
+      </div>
+
+      ${r.is_portefeuille_proprietaire ? `
+      <div class="card-title" style="font-size:.95rem;margin:.8rem 0 .4rem">
+        <i class="fas fa-crown" style="color:var(--gold, #FFB800)"></i> Portefeuille Propriétaire
+      </div>
+      <div class="form-grid mb-3" style="background:linear-gradient(135deg,#fffbeb 0%,#ffffff 100%);padding:.7rem;border-radius:6px;border-left:3px solid var(--gold, #FFB800)">
+        <div><strong>Statut :</strong> <span class="badge badge-gold">PORTEFEUILLE 100%</span></div>
+        <div><strong>Date de signature :</strong> ${r.date_signature_portefeuille ? '<span style="color:#06A05A"><i class="fas fa-check"></i> ' + escapeHtml((r.date_signature_portefeuille || '').substring(0,10)) + '</span>' : '<span class="text-danger">Non signée — facturable par DropEat jusqu&rsquo;à signature</span>'}</div>
+        <div style="grid-column:1/-1;font-size:.78rem;color:#6b7280">
+          <i class="fas fa-info-circle"></i> Règle : avant date de signature → commissions facturables par DropEat. Après signature → 100% pour l'agent.
+        </div>
+      </div>
+      ` : ''}
+
       <div class="conformite-banner" style="border-left:4px solid ${confColor};padding:.7rem .9rem;background:#f8fafc;border-radius:6px;margin-bottom:.8rem">
         <strong><i class="fas fa-${conf.conforme ? 'check-circle' : 'triangle-exclamation'}"></i>
         Conformité documentaire : ${conf.pourcentage_completion}%</strong>
@@ -858,16 +892,30 @@ async function restaurantDetailModal(id, agents) {
         Cliquez sur <strong>+ Plateforme</strong> pour ajouter Deliveroo, Just Eat, site web…
       </p>
       <table class="data-table">
-        <thead><tr><th>#</th><th>Nom</th><th>Plateformes</th><th>Uber Store ID</th><th class="text-right">Cmds</th><th class="text-right">CA</th><th class="text-right">Actions</th></tr></thead>
-        <tbody>${marques.length ? marques.map(mq => `
+        <thead><tr><th>#</th><th>Nom</th><th>Plateformes</th><th>Uber Store ID</th><th>Statut</th><th>Accès Uber</th><th>Tablette</th><th class="text-right">Cmds</th><th class="text-right">CA</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>${marques.length ? marques.map(mq => {
+          const statutMarqueBadge = mq.statut_marque === 'active' ? '<span class="badge badge-primary" style="font-size:.65rem"><i class="fas fa-check"></i> Active</span>' :
+            mq.statut_marque === 'en_creation' ? '<span class="badge badge-warning" style="font-size:.65rem"><i class="fas fa-hourglass-half"></i> En création</span>' :
+            mq.statut_marque === 'suspendue' ? '<span class="badge badge-danger" style="font-size:.65rem">Suspendue</span>' :
+            mq.statut_marque === 'fermee' ? '<span class="badge badge-slate" style="font-size:.65rem">Fermée</span>' :
+            '<span class="badge badge-slate" style="font-size:.65rem">—</span>'
+          const hasMgr = !!(mq.uber_manager_email || mq.uber_manager_url)
+          const hasOrd = !!(mq.uber_orders_email || mq.uber_orders_url)
+          return `
           <tr>
-            <td>${mq.rang_creation || '-'} ${mq.is_portefeuille_proprietaire ? '<span class="badge badge-gold" style="font-size:.6rem">P</span>' : ''}${mq.exclue_tranche ? '<span class="badge badge-slate" style="font-size:.6rem" title="Marque héritée d\'un resto attribué (décalée en tranche suivante)">H</span>' : ''}</td>
+            <td>${mq.rang_creation || '-'} ${mq.is_portefeuille_proprietaire ? '<span class="badge badge-gold" style="font-size:.6rem" title="Portefeuille 100%' + (mq.date_signature_portefeuille ? ' — signé ' + (mq.date_signature_portefeuille || '').substring(0,10) : ' — non signé') + '">P</span>' : ''}${mq.exclue_tranche ? '<span class="badge badge-slate" style="font-size:.6rem" title="Marque héritée d\'un resto attribué (décalée en tranche suivante)">H</span>' : ''}</td>
             <td><strong>${escapeHtml(mq.nom)}</strong>${mq.date_lancement ? `<div class="text-muted" style="font-size:.7rem">Lancée ${fmtDate(mq.date_lancement)}</div>` : ''}</td>
             <td>
               <span class="badge badge-slate">${escapeHtml(mq.plateforme || '—')}</span>
               <button class="btn btn-sm btn-link" data-mq-plats="${mq.id}" title="Gérer les plateformes" style="padding:.1rem .35rem"><i class="fas fa-plus-circle"></i></button>
             </td>
             <td><code>${escapeHtml(mq.uber_store_id || '-')}</code></td>
+            <td>${statutMarqueBadge}</td>
+            <td style="font-size:.75rem">
+              ${hasMgr ? `<span title="Manager: ${escapeHtml(mq.uber_manager_email || mq.uber_manager_url || '')}" style="color:#06A05A"><i class="fas fa-check-circle"></i> Mgr</span>` : '<span class="text-muted">— Mgr</span>'}
+              ${hasOrd ? `<span title="Orders: ${escapeHtml(mq.uber_orders_email || mq.uber_orders_url || '')}" style="color:#06A05A;margin-left:.3rem"><i class="fas fa-check-circle"></i> Ord</span>` : '<span class="text-muted" style="margin-left:.3rem">— Ord</span>'}
+            </td>
+            <td style="font-size:.75rem">${mq.tablette_fournie ? `<span style="color:#06A05A"><i class="fas fa-tablet-screen-button"></i>${mq.tablette_serial ? ' <code style="font-size:.7rem">' + escapeHtml(mq.tablette_serial) + '</code>' : ''}</span>` : '<span class="text-muted">Non</span>'}</td>
             <td class="text-right">${fmtNum(mq.nb_commandes)}</td>
             <td class="text-right">${fmtEUR(mq.ca_total)}</td>
             <td class="text-right">
@@ -875,7 +923,7 @@ async function restaurantDetailModal(id, agents) {
               <button class="btn btn-sm btn-secondary" data-edit-marque="${mq.id}" data-marque-data='${escapeHtml(JSON.stringify(mq))}'><i class="fas fa-pen"></i></button>
               <button class="btn btn-sm btn-danger" data-del-marque="${mq.id}"><i class="fas fa-trash"></i></button>
             </td>
-          </tr>`).join('') : '<tr><td colspan="7" class="text-center text-muted">Aucune marque — cliquez sur « Ajouter une marque »</td></tr>'}</tbody>
+          </tr>`}).join('') : '<tr><td colspan="10" class="text-center text-muted">Aucune marque — cliquez sur « Ajouter une marque »</td></tr>'}</tbody>
       </table>
     </div>
 
@@ -1101,6 +1149,11 @@ async function restaurantDetailModal(id, agents) {
       toast('Menu mis à jour'); m.close(); restaurantDetailModal(id, agents)
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
+
+  // Copy IBAN
+  m.el.querySelectorAll('[data-copy-iban]').forEach(b => b.onclick = () => {
+    navigator.clipboard.writeText(b.dataset.copyIban).then(() => toast('IBAN copié dans le presse-papiers'))
+  })
 
   // Historique commandes par marque (traçabilité 100%)
   m.el.querySelectorAll('[data-mq-history]').forEach(b => b.onclick = () => marqueHistoryModal(b.dataset.mqHistory))
