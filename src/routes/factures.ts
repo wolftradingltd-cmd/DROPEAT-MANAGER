@@ -16,6 +16,9 @@ import {
   buildLignesFactureRestaurant,
   buildLignesFactureAgentResto,
   listRestosPortefeuilleAvecCommandes,
+  listMarquesFacturablesResto,
+  listMarquesFacturablesAgent,
+  listMarquesPortefeuilleResto,
   resolvePeriode,
   type ProfilSociete
 } from '../lib/factures'
@@ -162,19 +165,47 @@ app.post('/agent/preview', async (c) => {
   const periode = parsePeriodeBody(body)
   if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
 
-  // Filtres optionnels : restaurant_id, marque_id pour cibler la facture
+  // Filtres optionnels : restaurant_id, marque_id (rétrocompat) ou marques_ids[], scope
   const filters: any = {}
   if (body.restaurant_id) filters.restaurant_id = Number(body.restaurant_id)
   if (body.marque_id) filters.marque_id = Number(body.marque_id)
+  if (Array.isArray(body.marques_ids) && body.marques_ids.length > 0) {
+    filters.marques_ids = body.marques_ids.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+  }
+  // scope : 'standard' (sans N+1/N+2) | 'mlm' (N+1/N+2 seulement) | 'all' (défaut)
+  if (body.scope && ['standard', 'mlm', 'all'].includes(body.scope)) {
+    filters.scope = body.scope
+  }
 
   const lignes = await buildLignesFactureAgent(c.env.DB, user.id, periode.annee, periode.mois, periode.range, filters)
   const total = lignes.reduce((s, l) => s + l.montant_ht, 0)
+
+  // Si split_by_marque : on regroupe les lignes par marque pour aperçu multi-facture
+  const groupes = body.split_by_marque ? groupLignesByMarque(lignes) : null
+
   return c.json({
     lignes, total, nb_lignes: lignes.length,
+    groupes,
     filtres: filters,
     periode: { annee: periode.annee, mois: periode.mois, label: periode.label, type: periode.type, date_debut: periode.date_debut, date_fin: periode.date_fin }
   })
 })
+
+// Helper : regroupe les lignes par marque (clé null pour les lignes sans marque comme MLM)
+function groupLignesByMarque(lignes: any[]): Array<{ marque_id: number | null; libelle: string; lignes: any[]; total_ht: number }> {
+  const map = new Map<string, { marque_id: number | null; libelle: string; lignes: any[]; total_ht: number }>()
+  for (const l of lignes) {
+    const key = l.marque_id ? `m_${l.marque_id}` : '_no_marque'
+    const label = l.marque_id ? (l.libelle.split('—')[1]?.trim() || `Marque #${l.marque_id}`) : 'MLM (N+1 / N+2)'
+    if (!map.has(key)) {
+      map.set(key, { marque_id: l.marque_id || null, libelle: label, lignes: [], total_ht: 0 })
+    }
+    const g = map.get(key)!
+    g.lignes.push(l)
+    g.total_ht += l.montant_ht
+  }
+  return Array.from(map.values())
+}
 
 // ============================================================
 // POST /api/factures/agent/create
@@ -188,6 +219,7 @@ app.post('/agent/create', async (c) => {
   const periode = parsePeriodeBody(body)
   if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
   const { notes } = body
+  const splitByMarque = body.split_by_marque === true
 
   // Vérif : profil société rempli
   const profil = await getProfil(c.env.DB, user.id)
@@ -195,48 +227,131 @@ app.post('/agent/create', async (c) => {
     return c.json({ error: 'Veuillez compléter votre profil société avant de créer une facture (Mon profil société)' }, 400)
   }
 
-  // Anti-doublons : chevauchement avec une facture existante de cet émetteur
-  const conflit = await checkChevauchement(c.env.DB, {
-    type: 'agent_to_dropeat',
-    emetteur_user_id: user.id,
-    date_debut: periode.date_debut,
-    date_fin: periode.date_fin,
-    annee: periode.annee,
-    mois: periode.mois
-  })
-  if (conflit) {
-    return c.json({ error: `Une facture chevauche déjà cette période : ${conflit.numero} (${conflit.statut})` }, 400)
-  }
-
-  // Filtres optionnels : restaurant_id, marque_id pour cibler la facture
+  // Filtres optionnels : restaurant_id, marque_id (rétrocompat) ou marques_ids[], scope
   const filters: any = {}
   if (body.restaurant_id) filters.restaurant_id = Number(body.restaurant_id)
   if (body.marque_id) filters.marque_id = Number(body.marque_id)
+  if (Array.isArray(body.marques_ids) && body.marques_ids.length > 0) {
+    filters.marques_ids = body.marques_ids.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+  }
+  if (body.scope && ['standard', 'mlm', 'all'].includes(body.scope)) {
+    filters.scope = body.scope
+  }
+
+  // Anti-doublons : chevauchement avec une facture existante de cet émetteur
+  // ⚠ NB : on n'empêche pas l'agent de créer plusieurs factures sur le même mois
+  // si elles ciblent des marques différentes. Le contrôle se fait au niveau lignes
+  // (une commande ne peut figurer que sur une facture validée/payée).
+  // On garde l'anti-chevauchement uniquement si AUCUN filtre n'est appliqué
+  // (facture globale = empêche les doublons globaux).
+  if (!filters.restaurant_id && !filters.marque_id && !filters.marques_ids && !filters.scope) {
+    const conflit = await checkChevauchement(c.env.DB, {
+      type: 'agent_to_dropeat',
+      emetteur_user_id: user.id,
+      date_debut: periode.date_debut,
+      date_fin: periode.date_fin,
+      annee: periode.annee,
+      mois: periode.mois
+    })
+    if (conflit) {
+      return c.json({ error: `Une facture globale chevauche déjà cette période : ${conflit.numero} (${conflit.statut}). Pour facturer une marque/scope spécifique, sélectionnez les marques ou utilisez le scope MLM.` }, 400)
+    }
+  }
 
   // Construire les lignes
   const lignes = await buildLignesFactureAgent(c.env.DB, user.id, periode.annee, periode.mois, periode.range, filters)
-  if (!lignes.length) return c.json({ error: 'Aucune commission à facturer pour cette période' }, 400)
-  const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  if (!lignes.length) return c.json({ error: 'Aucune commission à facturer pour cette période avec ces filtres' }, 400)
 
-  // Snapshot émetteur
+  // Snapshot émetteur + destinataire (commun à toutes les factures du batch)
   const emetteurSnap = JSON.stringify(profil)
-
-  // Snapshot destinataire = superadmin
   const sa = await getSuperadmin(c.env.DB)
   const saProfil = sa ? await getProfil(c.env.DB, sa.id) : null
   const destSnap = JSON.stringify(saProfil || { raison_sociale: 'DROPEAT LTD', pays: 'United Kingdom' })
 
-  // Numéro : préfixe basé sur le mois principal de la période
-  const prefixe = `AGT-${periode.annee}-${String(periode.mois).padStart(2, '0')}`
-  const numero = await getNextFactureNumero(c.env.DB, prefixe, 4)
-
   const taux = profil.taux_tva || 0
-  const montantTVA = totalHT * (taux / 100)
-  const totalTTC = totalHT + montantTVA
   const devise = (profil.pays || '').toLowerCase().includes('kingdom') ? 'GBP' : 'EUR'
   const dateEmission = new Date()
   const dateEcheance = addDays(dateEmission, 30)
   const mentions = JSON.stringify(mentionsLegales(profil))
+
+  // Préfixe différent pour les factures MLM : 'AGT-MLM-...' pour traçabilité
+  const isMLM = filters.scope === 'mlm'
+  const prefixeBase = isMLM ? `AGT-MLM-${periode.annee}-${String(periode.mois).padStart(2, '0')}`
+                            : `AGT-${periode.annee}-${String(periode.mois).padStart(2, '0')}`
+
+  // ============================================================
+  // Mode SPLIT : une facture par marque (les lignes MLM sans marque sont regroupées)
+  // ============================================================
+  if (splitByMarque) {
+    const groupes = groupLignesByMarque(lignes)
+    const created: Array<{ facture_id: number; numero: string; libelle: string; montant_ht: number; montant_ttc: number }> = []
+
+    for (const g of groupes) {
+      const numero = await getNextFactureNumero(c.env.DB, prefixeBase, 4)
+      const totalHT_g = g.total_ht
+      const montantTVA_g = totalHT_g * (taux / 100)
+      const totalTTC_g = totalHT_g + montantTVA_g
+      const notesJSON_g = buildNotesInternes(
+        (notes ? notes + ' — ' : '') + `Facture ciblée : ${g.libelle}`,
+        periode
+      )
+
+      const r = await c.env.DB.prepare(`
+        INSERT INTO factures (
+          numero, type, emetteur_user_id, emetteur_snapshot,
+          dest_user_id, dest_snapshot,
+          periode_annee, periode_mois,
+          date_emission, date_echeance,
+          montant_ht, montant_tva, taux_tva, montant_ttc, devise,
+          statut, mentions_legales, notes_internes
+        ) VALUES (?, 'agent_to_dropeat', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'brouillon', ?, ?)
+      `).bind(
+        numero, user.id, emetteurSnap,
+        sa?.id || null, destSnap,
+        periode.annee, periode.mois,
+        fmtDate(dateEmission), fmtDate(dateEcheance),
+        totalHT_g, montantTVA_g, taux, totalTTC_g, devise,
+        mentions, notesJSON_g
+      ).run()
+      const factureId = r.meta.last_row_id as number
+
+      let ordre = 0
+      for (const l of g.lignes) {
+        ordre++
+        const tvaL = l.montant_ht * (taux / 100)
+        await c.env.DB.prepare(`
+          INSERT INTO facture_lignes (
+            facture_id, ordre, libelle, description, categorie,
+            marque_id, restaurant_id, agent_concerne_id,
+            quantite, prix_unitaire, montant_ht, taux_tva, montant_tva, montant_ttc
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          factureId, ordre, l.libelle, l.description, l.categorie,
+          l.marque_id || null, l.restaurant_id || null, l.agent_concerne_id || null,
+          l.quantite, l.prix_unitaire, l.montant_ht, taux, tvaL, l.montant_ht + tvaL
+        ).run()
+      }
+
+      created.push({ facture_id: factureId, numero, libelle: g.libelle, montant_ht: totalHT_g, montant_ttc: totalTTC_g })
+    }
+
+    return c.json({
+      success: true,
+      mode: 'split_by_marque',
+      nb_factures: created.length,
+      factures: created,
+      total_ht: created.reduce((s, x) => s + x.montant_ht, 0),
+      total_ttc: created.reduce((s, x) => s + x.montant_ttc, 0)
+    })
+  }
+
+  // ============================================================
+  // Mode GROUPÉ (défaut) : 1 seule facture
+  // ============================================================
+  const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  const numero = await getNextFactureNumero(c.env.DB, prefixeBase, 4)
+  const montantTVA = totalHT * (taux / 100)
+  const totalTTC = totalHT + montantTVA
   const notesJSON = buildNotesInternes(notes, periode)
 
   const r = await c.env.DB.prepare(`
@@ -259,7 +374,6 @@ app.post('/agent/create', async (c) => {
 
   const factureId = r.meta.last_row_id as number
 
-  // Insertion lignes
   let ordre = 0
   for (const l of lignes) {
     ordre++
@@ -277,13 +391,169 @@ app.post('/agent/create', async (c) => {
     ).run()
   }
 
-  return c.json({ success: true, facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
+  return c.json({ success: true, mode: 'groupee', facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
+})
+
+// ============================================================
+// GET /api/factures/resto/marques-facturables?restaurant_id=&annee=&mois=
+// SUPERADMIN — Liste toutes les marques d'un restaurant avec leurs montants
+// (y compris portefeuille pour vérification — non éligibles à facturation DropEat)
+// ============================================================
+app.get('/resto/marques-facturables', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') return c.json({ error: 'Réservé superadmin' }, 403)
+  const restaurant_id = parseInt(c.req.query('restaurant_id') || '0')
+  if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
+
+  const date_debut = c.req.query('date_debut')
+  const date_fin = c.req.query('date_fin')
+  let annee: number, mois: number, range: { debut: string; fin: string } | undefined
+  if (date_debut && date_fin) {
+    const r = resolvePeriode({ date_debut, date_fin })
+    annee = new Date(date_debut).getFullYear()
+    mois = new Date(date_debut).getMonth() + 1
+    range = { debut: r.debut, fin: r.fin }
+  } else {
+    annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+    mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+  }
+
+  const resto = await c.env.DB.prepare(`
+    SELECT r.id, r.nom, r.ville, r.adresse, COALESCE(r.is_portefeuille_proprietaire, 0) as is_portefeuille,
+      u.id as agent_id, u.prenom as agent_prenom, u.nom as agent_nom
+    FROM restaurants r LEFT JOIN users u ON r.agent_id = u.id WHERE r.id = ?
+  `).bind(restaurant_id).first() as any
+  if (!resto) return c.json({ error: 'Restaurant introuvable' }, 404)
+
+  const marques = await listMarquesFacturablesResto(c.env.DB, restaurant_id, annee, mois, range)
+
+  return c.json({
+    restaurant: resto,
+    marques,
+    periode: { annee, mois, date_debut: date_debut || null, date_fin: date_fin || null }
+  })
+})
+
+// ============================================================
+// GET /api/factures/resto/a-facturer-ce-mois?annee=&mois=
+// SUPERADMIN — Pour chaque restaurant, agrège le total à facturer (DropEat→resto)
+// pour la période donnée + indique s'il existe déjà une facture sur cette période.
+// Utilisé sur la liste des restaurants (Module 5).
+// ============================================================
+app.get('/resto/a-facturer-ce-mois', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') return c.json({ error: 'Réservé superadmin' }, 403)
+
+  const date_debut = c.req.query('date_debut')
+  const date_fin = c.req.query('date_fin')
+  let annee: number, mois: number, debut: string, fin: string
+  if (date_debut && date_fin) {
+    const r = resolvePeriode({ date_debut, date_fin })
+    annee = new Date(date_debut).getFullYear()
+    mois = new Date(date_debut).getMonth() + 1
+    debut = r.debut; fin = r.fin
+  } else {
+    annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+    mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+    const r = resolvePeriode({ annee, mois })
+    debut = r.debut; fin = r.fin
+  }
+
+  // Agrégat par restaurant : SUM(facturation_estimee) sur marques NON portefeuille, resto NON portefeuille
+  const { results } = await c.env.DB.prepare(`
+    SELECT
+      r.id as restaurant_id,
+      COALESCE(SUM(CASE
+        WHEN COALESCE(m.is_portefeuille_proprietaire, 0) = 0
+         AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
+        THEN COALESCE(c.montant_facture_resto, 0)
+        ELSE 0
+      END), 0) as total_a_facturer_ht,
+      COUNT(DISTINCT CASE
+        WHEN COALESCE(m.is_portefeuille_proprietaire, 0) = 0
+         AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
+         AND COALESCE(c.montant_facture_resto, 0) > 0
+        THEN m.id END) as nb_marques_facturables,
+      COUNT(c.id) as nb_commandes
+    FROM restaurants r
+    LEFT JOIN marques_virtuelles m ON m.restaurant_id = r.id
+    LEFT JOIN commandes c ON c.marque_id = m.id
+      AND c.date_commande >= ? AND c.date_commande <= ?
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+    GROUP BY r.id
+  `).bind(debut, fin).all() as any
+
+  // Vérifier les factures déjà émises (dropeat_to_resto) sur cette période
+  const { results: fexist } = await c.env.DB.prepare(`
+    SELECT dest_restaurant_id, numero, statut, montant_ht
+    FROM factures
+    WHERE type = 'dropeat_to_resto'
+      AND periode_annee = ? AND periode_mois = ?
+  `).bind(annee, mois).all() as any
+
+  const factMap = new Map<number, any[]>()
+  for (const f of (fexist || [])) {
+    const arr = factMap.get(f.dest_restaurant_id) || []
+    arr.push(f)
+    factMap.set(f.dest_restaurant_id, arr)
+  }
+
+  const map: Record<string, any> = {}
+  for (const row of (results || []) as any[]) {
+    const factures = factMap.get(row.restaurant_id) || []
+    map[String(row.restaurant_id)] = {
+      total_ht: Number(row.total_a_facturer_ht || 0),
+      nb_marques: Number(row.nb_marques_facturables || 0),
+      nb_commandes: Number(row.nb_commandes || 0),
+      factures_existantes: factures
+    }
+  }
+
+  return c.json({ map, periode: { annee, mois } })
+})
+
+// ============================================================
+// POST /api/factures/resto/preview
+// SUPERADMIN — Aperçu lignes avant création
+// Body : { restaurant_id, annee, mois, marques_ids?, split_by_marque? }
+// ============================================================
+app.post('/resto/preview', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') return c.json({ error: 'Réservé superadmin' }, 403)
+  const body = await c.req.json()
+  const { restaurant_id } = body
+  if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
+  const periode = parsePeriodeBody(body)
+  if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
+
+  const marquesIds = Array.isArray(body.marques_ids)
+    ? body.marques_ids.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+    : []
+
+  const resto = await c.env.DB.prepare(`SELECT id, nom FROM restaurants WHERE id = ?`).bind(restaurant_id).first() as any
+  if (!resto) return c.json({ error: 'Restaurant introuvable' }, 404)
+
+  const lignes = await buildLignesFactureRestaurant(
+    c.env.DB, restaurant_id, periode.annee, periode.mois, periode.range,
+    marquesIds.length > 0 ? { marques_ids: marquesIds } : undefined
+  )
+  const total = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  const groupes = body.split_by_marque ? groupLignesByMarque(lignes) : null
+
+  return c.json({
+    lignes, total, nb_lignes: lignes.length,
+    groupes,
+    restaurant: { id: resto.id, nom: resto.nom },
+    periode: { annee: periode.annee, mois: periode.mois, label: periode.label, type: periode.type, date_debut: periode.date_debut, date_fin: periode.date_fin }
+  })
 })
 
 // ============================================================
 // POST /api/factures/resto/create
-// Body : { restaurant_id, annee, mois }
-// SUPERADMIN — Génère facture DropEat → restaurant
+// Body : { restaurant_id, annee, mois, marques_ids?, split_by_marque? }
+// SUPERADMIN — Génère facture(s) DropEat → restaurant
+// - Par défaut : 1 seule facture groupée pour toutes les marques sélectionnées
+// - Si split_by_marque=true : 1 facture par marque
 // ============================================================
 app.post('/resto/create', async (c) => {
   const user = c.get('user')
@@ -293,23 +563,31 @@ app.post('/resto/create', async (c) => {
   if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
   const periode = parsePeriodeBody(body)
   if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
+  const splitByMarque = body.split_by_marque === true
+
+  const marquesIds = Array.isArray(body.marques_ids)
+    ? body.marques_ids.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+    : []
 
   const profil = await getProfil(c.env.DB, user.id)
   if (!profil || !profil.raison_sociale) {
     return c.json({ error: 'Veuillez compléter le profil société DROPEAT LTD avant de générer une facture' }, 400)
   }
 
-  // Anti-doublons : chevauchement
-  const conflit = await checkChevauchement(c.env.DB, {
-    type: 'dropeat_to_resto',
-    dest_restaurant_id: restaurant_id,
-    date_debut: periode.date_debut,
-    date_fin: periode.date_fin,
-    annee: periode.annee,
-    mois: periode.mois
-  })
-  if (conflit) {
-    return c.json({ error: `Une facture chevauche déjà cette période pour ce restaurant : ${conflit.numero} (${conflit.statut})` }, 400)
+  // Anti-doublons : si AUCUN filtre marques → chevauchement global
+  // Si filtres marques → on autorise (l'utilisateur peut facturer marque par marque)
+  if (marquesIds.length === 0) {
+    const conflit = await checkChevauchement(c.env.DB, {
+      type: 'dropeat_to_resto',
+      dest_restaurant_id: restaurant_id,
+      date_debut: periode.date_debut,
+      date_fin: periode.date_fin,
+      annee: periode.annee,
+      mois: periode.mois
+    })
+    if (conflit) {
+      return c.json({ error: `Une facture globale chevauche déjà cette période pour ce restaurant : ${conflit.numero} (${conflit.statut}). Pour facturer marque par marque, sélectionnez les marques voulues.` }, 400)
+    }
   }
 
   const resto = await c.env.DB.prepare(`
@@ -318,9 +596,11 @@ app.post('/resto/create', async (c) => {
   `).bind(restaurant_id).first() as any
   if (!resto) return c.json({ error: 'Restaurant introuvable' }, 404)
 
-  const lignes = await buildLignesFactureRestaurant(c.env.DB, restaurant_id, periode.annee, periode.mois, periode.range)
-  if (!lignes.length) return c.json({ error: 'Aucune facturation à émettre pour cette période' }, 400)
-  const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  const lignes = await buildLignesFactureRestaurant(
+    c.env.DB, restaurant_id, periode.annee, periode.mois, periode.range,
+    marquesIds.length > 0 ? { marques_ids: marquesIds } : undefined
+  )
+  if (!lignes.length) return c.json({ error: 'Aucune facturation à émettre pour cette période avec ces filtres' }, 400)
 
   const emetteurSnap = JSON.stringify(profil)
   const destSnap = JSON.stringify({
@@ -335,17 +615,87 @@ app.post('/resto/create', async (c) => {
     telephone: resto.telephone
   })
 
-  const prefixe = `DRP-${periode.annee}-${String(periode.mois).padStart(2, '0')}-R`
-  const numero = await getNextFactureNumero(c.env.DB, prefixe, 3)
-
   const taux = profil.taux_tva || 0
-  const montantTVA = totalHT * (taux / 100)
-  const totalTTC = totalHT + montantTVA
   const devise = (profil.pays || '').toLowerCase().includes('kingdom') ? 'GBP' : 'EUR'
   const dateEmission = new Date()
   const dateEcheance = addDays(dateEmission, 30)
   const mentions = JSON.stringify(mentionsLegales(profil))
-  const notesJSON = buildNotesInternes(null, periode)
+  const prefixe = `DRP-${periode.annee}-${String(periode.mois).padStart(2, '0')}-R`
+
+  // ============================================================
+  // Mode SPLIT : 1 facture par marque
+  // ============================================================
+  if (splitByMarque) {
+    const groupes = groupLignesByMarque(lignes)
+    const created: Array<{ facture_id: number; numero: string; libelle: string; montant_ht: number; montant_ttc: number }> = []
+
+    for (const g of groupes) {
+      const numero = await getNextFactureNumero(c.env.DB, prefixe, 3)
+      const totalHT_g = g.total_ht
+      const montantTVA_g = totalHT_g * (taux / 100)
+      const totalTTC_g = totalHT_g + montantTVA_g
+      const notesJSON_g = buildNotesInternes(`Facture ciblée : ${g.libelle}`, periode)
+
+      const r = await c.env.DB.prepare(`
+        INSERT INTO factures (
+          numero, type, emetteur_user_id, emetteur_snapshot,
+          dest_restaurant_id, dest_snapshot,
+          periode_annee, periode_mois,
+          date_emission, date_echeance,
+          montant_ht, montant_tva, taux_tva, montant_ttc, devise,
+          statut, mentions_legales, notes_internes
+        ) VALUES (?, 'dropeat_to_resto', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'envoyee', ?, ?)
+      `).bind(
+        numero, user.id, emetteurSnap,
+        restaurant_id, destSnap,
+        periode.annee, periode.mois,
+        fmtDate(dateEmission), fmtDate(dateEcheance),
+        totalHT_g, montantTVA_g, taux, totalTTC_g, devise,
+        mentions, notesJSON_g
+      ).run()
+      const factureId = r.meta.last_row_id as number
+      await c.env.DB.prepare(`UPDATE factures SET envoyee_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(factureId).run()
+
+      let ordre = 0
+      for (const l of g.lignes) {
+        ordre++
+        const tvaL = l.montant_ht * (taux / 100)
+        await c.env.DB.prepare(`
+          INSERT INTO facture_lignes (
+            facture_id, ordre, libelle, description, categorie,
+            marque_id, restaurant_id, agent_concerne_id,
+            quantite, prix_unitaire, montant_ht, taux_tva, montant_tva, montant_ttc
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          factureId, ordre, l.libelle, l.description, 'facturation_resto',
+          l.marque_id || null, l.restaurant_id || null, null,
+          l.quantite, l.prix_unitaire, l.montant_ht, taux, tvaL, l.montant_ht + tvaL
+        ).run()
+      }
+      created.push({ facture_id: factureId, numero, libelle: g.libelle, montant_ht: totalHT_g, montant_ttc: totalTTC_g })
+    }
+
+    return c.json({
+      success: true,
+      mode: 'split_by_marque',
+      nb_factures: created.length,
+      factures: created,
+      total_ht: created.reduce((s, x) => s + x.montant_ht, 0),
+      total_ttc: created.reduce((s, x) => s + x.montant_ttc, 0)
+    })
+  }
+
+  // ============================================================
+  // Mode GROUPÉ (défaut)
+  // ============================================================
+  const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  const numero = await getNextFactureNumero(c.env.DB, prefixe, 3)
+  const montantTVA = totalHT * (taux / 100)
+  const totalTTC = totalHT + montantTVA
+  const notesJSON = buildNotesInternes(
+    marquesIds.length > 0 ? `Facture ciblée sur ${marquesIds.length} marque(s)` : null,
+    periode
+  )
 
   const r = await c.env.DB.prepare(`
     INSERT INTO factures (
@@ -384,7 +734,59 @@ app.post('/resto/create', async (c) => {
     ).run()
   }
 
-  return c.json({ success: true, facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
+  return c.json({ success: true, mode: 'groupee', facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
+})
+
+// ============================================================
+// GET /api/factures/agent/marques-facturables-self?annee=&mois=
+// AGENT — Liste les marques de l'agent connecté avec montants de la période
+// ============================================================
+app.get('/agent/marques-facturables-self', async (c) => {
+  const user = c.get('user')
+  const date_debut = c.req.query('date_debut')
+  const date_fin = c.req.query('date_fin')
+  let annee: number, mois: number, range: { debut: string; fin: string } | undefined
+  if (date_debut && date_fin) {
+    const r = resolvePeriode({ date_debut, date_fin })
+    annee = new Date(date_debut).getFullYear()
+    mois = new Date(date_debut).getMonth() + 1
+    range = { debut: r.debut, fin: r.fin }
+  } else {
+    annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+    mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+  }
+  const marques = await listMarquesFacturablesAgent(c.env.DB, user.id, annee, mois, range)
+  return c.json({ marques, periode: { annee, mois, date_debut: date_debut || null, date_fin: date_fin || null } })
+})
+
+// ============================================================
+// GET /api/factures/agent-resto/marques-portefeuille?restaurant_id=&annee=&mois=
+// AGENT — Liste marques en portefeuille d'un resto (pour picker portefeuille 100%)
+// ============================================================
+app.get('/agent-resto/marques-portefeuille', async (c) => {
+  const user = c.get('user')
+  const restaurant_id = parseInt(c.req.query('restaurant_id') || '0')
+  if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
+  const date_debut = c.req.query('date_debut')
+  const date_fin = c.req.query('date_fin')
+  let annee: number, mois: number, range: { debut: string; fin: string } | undefined
+  if (date_debut && date_fin) {
+    const r = resolvePeriode({ date_debut, date_fin })
+    annee = new Date(date_debut).getFullYear()
+    mois = new Date(date_debut).getMonth() + 1
+    range = { debut: r.debut, fin: r.fin }
+  } else {
+    annee = parseInt(c.req.query('annee') || String(new Date().getFullYear()))
+    mois = parseInt(c.req.query('mois') || String(new Date().getMonth() + 1))
+  }
+  // Vérifier ownership
+  const resto = await c.env.DB.prepare('SELECT id, nom, agent_id FROM restaurants WHERE id = ?').bind(restaurant_id).first() as any
+  if (!resto) return c.json({ error: 'Restaurant introuvable' }, 404)
+  if (resto.agent_id !== user.id && user.role !== 'superadmin') {
+    return c.json({ error: 'Ce restaurant ne vous appartient pas' }, 403)
+  }
+  const marques = await listMarquesPortefeuilleResto(c.env.DB, resto.agent_id, restaurant_id, annee, mois, range)
+  return c.json({ restaurant: { id: resto.id, nom: resto.nom }, marques, periode: { annee, mois, date_debut: date_debut || null, date_fin: date_fin || null } })
 })
 
 // ============================================================
@@ -417,7 +819,7 @@ app.get('/agent-resto/restos-eligibles', async (c) => {
 })
 
 // POST /api/factures/agent-resto/preview
-// Body : { restaurant_id, annee, mois } OU { restaurant_id, date_debut, date_fin }
+// Body : { restaurant_id, annee, mois, marques_ids?, split_by_marque? }
 app.post('/agent-resto/preview', async (c) => {
   const user = c.get('user')
   const body = await c.req.json()
@@ -435,17 +837,27 @@ app.post('/agent-resto/preview', async (c) => {
     return c.json({ error: 'Ce restaurant ne vous appartient pas' }, 403)
   }
 
-  const lignes = await buildLignesFactureAgentResto(c.env.DB, user.id, restaurant_id, periode.annee, periode.mois, periode.range)
+  const marquesIds = Array.isArray(body.marques_ids)
+    ? body.marques_ids.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+    : []
+
+  const lignes = await buildLignesFactureAgentResto(
+    c.env.DB, user.id, restaurant_id, periode.annee, periode.mois, periode.range,
+    marquesIds.length > 0 ? { marques_ids: marquesIds } : undefined
+  )
   const total = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  const groupes = body.split_by_marque ? groupLignesByMarque(lignes) : null
+
   return c.json({
     lignes, total, nb_lignes: lignes.length,
+    groupes,
     periode: { annee: periode.annee, mois: periode.mois, label: periode.label, type: periode.type, date_debut: periode.date_debut, date_fin: periode.date_fin },
     restaurant: { id: resto.id, nom: resto.nom }
   })
 })
 
 // POST /api/factures/agent-resto/create
-// Body : { restaurant_id, annee, mois, notes? } OU { restaurant_id, date_debut, date_fin, notes? }
+// Body : { restaurant_id, annee, mois, notes?, marques_ids?, split_by_marque? }
 app.post('/agent-resto/create', async (c) => {
   const user = c.get('user')
   const body = await c.req.json()
@@ -453,6 +865,11 @@ app.post('/agent-resto/create', async (c) => {
   if (!restaurant_id) return c.json({ error: 'restaurant_id requis' }, 400)
   const periode = parsePeriodeBody(body)
   if (!periode) return c.json({ error: '(annee+mois) OU (date_debut+date_fin) requis' }, 400)
+  const splitByMarque = body.split_by_marque === true
+
+  const marquesIds = Array.isArray(body.marques_ids)
+    ? body.marques_ids.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+    : []
 
   // Vérif profil société rempli
   const profil = await getProfil(c.env.DB, user.id)
@@ -471,23 +888,27 @@ app.post('/agent-resto/create', async (c) => {
     return c.json({ error: 'Ce restaurant ne vous appartient pas' }, 403)
   }
 
-  // Anti-doublons : chevauchement strict (couvre les facturations partielles + custom)
-  const conflit = await checkChevauchement(c.env.DB, {
-    type: 'agent_to_resto',
-    emetteur_user_id: user.id,
-    dest_restaurant_id: restaurant_id,
-    date_debut: periode.date_debut,
-    date_fin: periode.date_fin,
-    annee: periode.annee,
-    mois: periode.mois
-  })
-  if (conflit) {
-    return c.json({ error: `Une facture chevauche déjà cette période pour ce restaurant : ${conflit.numero} (${conflit.statut})` }, 400)
+  // Anti-doublons : si AUCUN filtre marque → chevauchement global
+  if (marquesIds.length === 0) {
+    const conflit = await checkChevauchement(c.env.DB, {
+      type: 'agent_to_resto',
+      emetteur_user_id: user.id,
+      dest_restaurant_id: restaurant_id,
+      date_debut: periode.date_debut,
+      date_fin: periode.date_fin,
+      annee: periode.annee,
+      mois: periode.mois
+    })
+    if (conflit) {
+      return c.json({ error: `Une facture globale chevauche déjà cette période pour ce restaurant : ${conflit.numero} (${conflit.statut}). Pour facturer marque par marque, sélectionnez les marques voulues.` }, 400)
+    }
   }
 
-  const lignes = await buildLignesFactureAgentResto(c.env.DB, user.id, restaurant_id, periode.annee, periode.mois, periode.range)
-  if (!lignes.length) return c.json({ error: 'Aucun encaissement direct (portefeuille) à facturer pour cette période' }, 400)
-  const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  const lignes = await buildLignesFactureAgentResto(
+    c.env.DB, user.id, restaurant_id, periode.annee, periode.mois, periode.range,
+    marquesIds.length > 0 ? { marques_ids: marquesIds } : undefined
+  )
+  if (!lignes.length) return c.json({ error: 'Aucun encaissement direct (portefeuille) à facturer pour cette période avec ces filtres' }, 400)
 
   // Snapshots
   const emetteurSnap = JSON.stringify(profil)
@@ -506,17 +927,85 @@ app.post('/agent-resto/create', async (c) => {
   // ⚠️ NUMÉROTATION RÉGLEMENTAIRE (art. 242 nonies A CGI) :
   // Chaque agent émet ses factures Portefeuille sous SA propre identité fiscale.
   // → Séquence isolée par agent (PA-{agent_id}-{annee}-NNNN), sans trou, continue.
-  // Format : PA-12-2026-0001 (Portefeuille Agent #12, 2026, facture n°1)
   const prefixe = `PA-${user.id}-${periode.annee}`
-  const numero = await getNextFactureNumero(c.env.DB, prefixe, 4)
-
   const taux = profil.taux_tva || 0
-  const montantTVA = totalHT * (taux / 100)
-  const totalTTC = totalHT + montantTVA
   const devise = (profil.pays || '').toLowerCase().includes('kingdom') ? 'GBP' : 'EUR'
   const dateEmission = new Date()
   const dateEcheance = addDays(dateEmission, 30)
   const mentions = JSON.stringify(mentionsLegales(profil))
+
+  // ============================================================
+  // Mode SPLIT : 1 facture par marque
+  // ============================================================
+  if (splitByMarque) {
+    const groupes = groupLignesByMarque(lignes)
+    const created: Array<{ facture_id: number; numero: string; libelle: string; montant_ht: number; montant_ttc: number }> = []
+
+    for (const g of groupes) {
+      const numero = await getNextFactureNumero(c.env.DB, prefixe, 4)
+      const totalHT_g = g.total_ht
+      const montantTVA_g = totalHT_g * (taux / 100)
+      const totalTTC_g = totalHT_g + montantTVA_g
+      const notesJSON_g = buildNotesInternes(
+        (notes ? notes + ' — ' : '') + `Facture ciblée : ${g.libelle}`,
+        periode
+      )
+
+      const r = await c.env.DB.prepare(`
+        INSERT INTO factures (
+          numero, type, emetteur_user_id, emetteur_snapshot,
+          dest_restaurant_id, dest_snapshot,
+          periode_annee, periode_mois,
+          date_emission, date_echeance,
+          montant_ht, montant_tva, taux_tva, montant_ttc, devise,
+          statut, mentions_legales, notes_internes
+        ) VALUES (?, 'agent_to_resto', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'brouillon', ?, ?)
+      `).bind(
+        numero, user.id, emetteurSnap,
+        restaurant_id, destSnap,
+        periode.annee, periode.mois,
+        fmtDate(dateEmission), fmtDate(dateEcheance),
+        totalHT_g, montantTVA_g, taux, totalTTC_g, devise,
+        mentions, notesJSON_g
+      ).run()
+      const factureId = r.meta.last_row_id as number
+
+      let ordre = 0
+      for (const l of g.lignes) {
+        ordre++
+        const tvaL = l.montant_ht * (taux / 100)
+        await c.env.DB.prepare(`
+          INSERT INTO facture_lignes (
+            facture_id, ordre, libelle, description, categorie,
+            marque_id, restaurant_id, agent_concerne_id,
+            quantite, prix_unitaire, montant_ht, taux_tva, montant_tva, montant_ttc
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          factureId, ordre, l.libelle, l.description, l.categorie,
+          l.marque_id || null, l.restaurant_id || null, null,
+          l.quantite, l.prix_unitaire, l.montant_ht, taux, tvaL, l.montant_ht + tvaL
+        ).run()
+      }
+      created.push({ facture_id: factureId, numero, libelle: g.libelle, montant_ht: totalHT_g, montant_ttc: totalTTC_g })
+    }
+
+    return c.json({
+      success: true,
+      mode: 'split_by_marque',
+      nb_factures: created.length,
+      factures: created,
+      total_ht: created.reduce((s, x) => s + x.montant_ht, 0),
+      total_ttc: created.reduce((s, x) => s + x.montant_ttc, 0)
+    })
+  }
+
+  // ============================================================
+  // Mode GROUPÉ (défaut)
+  // ============================================================
+  const totalHT = lignes.reduce((s, l) => s + l.montant_ht, 0)
+  const numero = await getNextFactureNumero(c.env.DB, prefixe, 4)
+  const montantTVA = totalHT * (taux / 100)
+  const totalTTC = totalHT + montantTVA
   const notesJSON = buildNotesInternes(notes, periode)
 
   const r = await c.env.DB.prepare(`
@@ -555,7 +1044,7 @@ app.post('/agent-resto/create', async (c) => {
     ).run()
   }
 
-  return c.json({ success: true, facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
+  return c.json({ success: true, mode: 'groupee', facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
 })
 
 // ============================================================

@@ -165,14 +165,26 @@ export async function buildLignesFactureAgent(
   annee: number,
   mois: number,
   range?: { debut: string; fin: string },
-  filters?: { restaurant_id?: number; marque_id?: number }
+  filters?: {
+    restaurant_id?: number
+    marque_id?: number              // rétrocompat
+    marques_ids?: number[]          // NEW : sélection multi-marques
+    scope?: 'standard' | 'mlm' | 'all'  // NEW : 'standard' = propre seulement, 'mlm' = N+1/N+2 seulement
+  }
 ): Promise<LigneCommissionAgent[]> {
   const { debut, fin } = range
     ? { debut: range.debut, fin: range.fin }
     : resolvePeriode({ annee, mois })
 
   const restoFilter = filters?.restaurant_id ? Number(filters.restaurant_id) : null
-  const marqueFilter = filters?.marque_id ? Number(filters.marque_id) : null
+  // Normalisation : marques_ids prioritaire, sinon marque_id (rétrocompat)
+  let marquesIds: number[] = []
+  if (filters?.marques_ids && filters.marques_ids.length > 0) {
+    marquesIds = filters.marques_ids.map(Number).filter(n => Number.isFinite(n) && n > 0)
+  } else if (filters?.marque_id) {
+    marquesIds = [Number(filters.marque_id)]
+  }
+  const scope: 'standard' | 'mlm' | 'all' = filters?.scope || 'all'
 
   const lignes: LigneCommissionAgent[] = []
 
@@ -180,109 +192,119 @@ export async function buildLignesFactureAgent(
   //    ⚠️ EXCLUSION : les commandes en portefeuille propriétaire (5e resto OU 5e marque)
   //    NE figurent PAS sur la facture agent→DropEat.
   //    Elles sont facturées DIRECTEMENT au restaurant à 100% (facture agent→resto).
-  //    + filtres optionnels resto_id / marque_id (pour facture ciblée)
-  const propreSqlExtra: string[] = []
-  const propreParams: any[] = [debut, fin, agentId]
-  if (restoFilter) { propreSqlExtra.push('AND r.id = ?'); propreParams.push(restoFilter) }
-  if (marqueFilter) { propreSqlExtra.push('AND m.id = ?'); propreParams.push(marqueFilter) }
-  const { results: mesMarques } = await db.prepare(`
-    SELECT
-      m.id as marque_id, m.nom as marque_nom,
-      r.id as restaurant_id, r.nom as restaurant_nom,
-      COUNT(c.id) as nb_commandes,
-      COALESCE(SUM(c.commission_agent_montant), 0) as comm_propre
-    FROM marques_virtuelles m
-    JOIN restaurants r ON m.restaurant_id = r.id
-    LEFT JOIN commandes c ON c.marque_id = m.id
-      AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
-      AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
-      AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
-    WHERE r.agent_id = ?
-      ${propreSqlExtra.join(' ')}
-    GROUP BY m.id
-    HAVING comm_propre > 0
-  `).bind(...propreParams).all() as any
+  //    + filtres optionnels resto_id / marques_ids[] (pour facture ciblée)
+  if (scope === 'standard' || scope === 'all') {
+    const propreSqlExtra: string[] = []
+    const propreParams: any[] = [debut, fin, agentId]
+    if (restoFilter) { propreSqlExtra.push('AND r.id = ?'); propreParams.push(restoFilter) }
+    if (marquesIds.length > 0) {
+      const placeholders = marquesIds.map(() => '?').join(',')
+      propreSqlExtra.push(`AND m.id IN (${placeholders})`)
+      propreParams.push(...marquesIds)
+    }
+    const { results: mesMarques } = await db.prepare(`
+      SELECT
+        m.id as marque_id, m.nom as marque_nom,
+        r.id as restaurant_id, r.nom as restaurant_nom,
+        COUNT(c.id) as nb_commandes,
+        COALESCE(SUM(c.commission_agent_montant), 0) as comm_propre
+      FROM marques_virtuelles m
+      JOIN restaurants r ON m.restaurant_id = r.id
+      LEFT JOIN commandes c ON c.marque_id = m.id
+        AND c.date_commande >= ? AND c.date_commande <= ?
+        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+        AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
+        AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
+      WHERE r.agent_id = ?
+        ${propreSqlExtra.join(' ')}
+      GROUP BY m.id
+      HAVING comm_propre > 0
+    `).bind(...propreParams).all() as any
 
-  for (const m of mesMarques as any[]) {
-    lignes.push({
-      libelle: `Commission standard — ${m.marque_nom} (${m.restaurant_nom})`,
-      description: `${m.nb_commandes} commande(s) — ${annee}/${String(mois).padStart(2,'0')}`,
-      categorie: 'comm_propre',
-      marque_id: m.marque_id,
-      restaurant_id: m.restaurant_id,
-      quantite: m.nb_commandes,
-      prix_unitaire: m.nb_commandes > 0 ? m.comm_propre / m.nb_commandes : 0,
-      montant_ht: m.comm_propre
-    })
+    for (const m of mesMarques as any[]) {
+      lignes.push({
+        libelle: `Commission standard — ${m.marque_nom} (${m.restaurant_nom})`,
+        description: `${m.nb_commandes} commande(s) — ${annee}/${String(mois).padStart(2,'0')}`,
+        categorie: 'comm_propre',
+        marque_id: m.marque_id,
+        restaurant_id: m.restaurant_id,
+        quantite: m.nb_commandes,
+        prix_unitaire: m.nb_commandes > 0 ? m.comm_propre / m.nb_commandes : 0,
+        montant_ht: m.comm_propre
+      })
+    }
   }
 
-  // 2) Commissions N+1 sur ventes des filleuls directs (groupées par filleul)
-  //    ⚠️ EXCLUSION : commandes en portefeuille du filleul (5e resto/marque) → pas de remontée N+1
-  //    Si filtre resto/marque spécifique → skip (les lignes N+1/N+2 ne sont pas par resto)
-  const skipN1N2 = !!(restoFilter || marqueFilter)
-  const { results: n1 } = skipN1N2 ? { results: [] } : await db.prepare(`
-    SELECT
-      uChild.id as agent_id, uChild.nom, uChild.prenom,
-      COUNT(c.id) as nb_commandes,
-      COALESCE(SUM(c.commission_n1_montant), 0) as comm_n1
-    FROM commandes c
-    JOIN marques_virtuelles m ON c.marque_id = m.id
-    JOIN restaurants r ON m.restaurant_id = r.id
-    JOIN users uChild ON r.agent_id = uChild.id
-    WHERE uChild.parent_id = ?
-      AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
-      AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
-      AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
-    GROUP BY uChild.id
-    HAVING comm_n1 > 0
-  `).bind(agentId, debut, fin).all() as any
+  // 2-3) MLM : N+1 + N+2
+  // ⚠️ Les commissions MLM sont GLOBALES à l'agent (basées sur ses filleuls),
+  // donc on les inclut UNIQUEMENT si scope='mlm' ou 'all', et SI aucun filtre resto/marque
+  // n'est appliqué (un filtre resto/marque cible la facture commission standard).
+  const skipN1N2 = (scope === 'standard') || !!restoFilter || marquesIds.length > 0
 
-  for (const x of n1 as any[]) {
-    lignes.push({
-      libelle: `Commission N+1 — ${x.prenom} ${x.nom}`,
-      description: `Ventes du filleul direct — ${x.nb_commandes} commande(s)`,
-      categorie: 'comm_n1',
-      agent_concerne_id: x.agent_id,
-      quantite: x.nb_commandes,
-      prix_unitaire: x.nb_commandes > 0 ? x.comm_n1 / x.nb_commandes : 0,
-      montant_ht: x.comm_n1
-    })
-  }
+  if (!skipN1N2 && (scope === 'mlm' || scope === 'all')) {
+    // 2) Commissions N+1 sur ventes des filleuls directs (groupées par filleul)
+    const { results: n1 } = await db.prepare(`
+      SELECT
+        uChild.id as agent_id, uChild.nom, uChild.prenom,
+        COUNT(c.id) as nb_commandes,
+        COALESCE(SUM(c.commission_n1_montant), 0) as comm_n1
+      FROM commandes c
+      JOIN marques_virtuelles m ON c.marque_id = m.id
+      JOIN restaurants r ON m.restaurant_id = r.id
+      JOIN users uChild ON r.agent_id = uChild.id
+      WHERE uChild.parent_id = ?
+        AND c.date_commande >= ? AND c.date_commande <= ?
+        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+        AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
+        AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
+      GROUP BY uChild.id
+      HAVING comm_n1 > 0
+    `).bind(agentId, debut, fin).all() as any
 
-  // 3) Commissions N+2 sur ventes des sous-filleuls
-  //    ⚠️ EXCLUSION : commandes en portefeuille du sous-filleul → pas de remontée N+2
-  const { results: n2 } = skipN1N2 ? { results: [] } : await db.prepare(`
-    SELECT
-      uGrand.id as agent_id, uGrand.nom, uGrand.prenom,
-      uChild.prenom as via_prenom, uChild.nom as via_nom,
-      COUNT(c.id) as nb_commandes,
-      COALESCE(SUM(c.commission_n2_montant), 0) as comm_n2
-    FROM commandes c
-    JOIN marques_virtuelles m ON c.marque_id = m.id
-    JOIN restaurants r ON m.restaurant_id = r.id
-    JOIN users uGrand ON r.agent_id = uGrand.id
-    JOIN users uChild ON uGrand.parent_id = uChild.id
-    WHERE uChild.parent_id = ?
-      AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
-      AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
-      AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
-    GROUP BY uGrand.id
-    HAVING comm_n2 > 0
-  `).bind(agentId, debut, fin).all() as any
+    for (const x of n1 as any[]) {
+      lignes.push({
+        libelle: `Commission N+1 — ${x.prenom} ${x.nom}`,
+        description: `Ventes du filleul direct — ${x.nb_commandes} commande(s)`,
+        categorie: 'comm_n1',
+        agent_concerne_id: x.agent_id,
+        quantite: x.nb_commandes,
+        prix_unitaire: x.nb_commandes > 0 ? x.comm_n1 / x.nb_commandes : 0,
+        montant_ht: x.comm_n1
+      })
+    }
 
-  for (const x of n2 as any[]) {
-    lignes.push({
-      libelle: `Commission N+2 — ${x.prenom} ${x.nom}`,
-      description: `Via ${x.via_prenom} ${x.via_nom} — ${x.nb_commandes} commande(s)`,
-      categorie: 'comm_n2',
-      agent_concerne_id: x.agent_id,
-      quantite: x.nb_commandes,
-      prix_unitaire: x.nb_commandes > 0 ? x.comm_n2 / x.nb_commandes : 0,
-      montant_ht: x.comm_n2
-    })
+    // 3) Commissions N+2 sur ventes des sous-filleuls
+    const { results: n2 } = await db.prepare(`
+      SELECT
+        uGrand.id as agent_id, uGrand.nom, uGrand.prenom,
+        uChild.prenom as via_prenom, uChild.nom as via_nom,
+        COUNT(c.id) as nb_commandes,
+        COALESCE(SUM(c.commission_n2_montant), 0) as comm_n2
+      FROM commandes c
+      JOIN marques_virtuelles m ON c.marque_id = m.id
+      JOIN restaurants r ON m.restaurant_id = r.id
+      JOIN users uGrand ON r.agent_id = uGrand.id
+      JOIN users uChild ON uGrand.parent_id = uChild.id
+      WHERE uChild.parent_id = ?
+        AND c.date_commande >= ? AND c.date_commande <= ?
+        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+        AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
+        AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
+      GROUP BY uGrand.id
+      HAVING comm_n2 > 0
+    `).bind(agentId, debut, fin).all() as any
+
+    for (const x of n2 as any[]) {
+      lignes.push({
+        libelle: `Commission N+2 — ${x.prenom} ${x.nom}`,
+        description: `Via ${x.via_prenom} ${x.via_nom} — ${x.nb_commandes} commande(s)`,
+        categorie: 'comm_n2',
+        agent_concerne_id: x.agent_id,
+        quantite: x.nb_commandes,
+        prix_unitaire: x.nb_commandes > 0 ? x.comm_n2 / x.nb_commandes : 0,
+        montant_ht: x.comm_n2
+      })
+    }
   }
 
   return lignes
@@ -298,7 +320,8 @@ export async function buildLignesFactureRestaurant(
   restaurantId: number,
   annee: number,
   mois: number,
-  range?: { debut: string; fin: string }
+  range?: { debut: string; fin: string },
+  opts?: { marques_ids?: number[] }
 ): Promise<LigneCommissionAgent[]> {
   const { debut, fin } = range
     ? { debut: range.debut, fin: range.fin }
@@ -313,6 +336,17 @@ export async function buildLignesFactureRestaurant(
     return []
   }
 
+  const marquesIds = (opts?.marques_ids || [])
+    .map(Number).filter(n => Number.isFinite(n) && n > 0)
+
+  const extra: string[] = []
+  const params: any[] = [debut, fin, restaurantId]
+  if (marquesIds.length > 0) {
+    const placeholders = marquesIds.map(() => '?').join(',')
+    extra.push(`AND m.id IN (${placeholders})`)
+    params.push(...marquesIds)
+  }
+
   const { results } = await db.prepare(`
     SELECT
       m.id as marque_id, m.nom as marque_nom,
@@ -325,9 +359,10 @@ export async function buildLignesFactureRestaurant(
       AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     WHERE m.restaurant_id = ?
       AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
+      ${extra.join(' ')}
     GROUP BY m.id
     HAVING facturation > 0
-  `).bind(debut, fin, restaurantId).all() as any
+  `).bind(...params).all() as any
 
   return (results as any[]).map(r => ({
     libelle: `Service DropEat — ${r.marque_nom}`,
@@ -339,6 +374,146 @@ export async function buildLignesFactureRestaurant(
     prix_unitaire: r.nb_commandes > 0 ? r.facturation / r.nb_commandes : 0,
     montant_ht: r.facturation
   }))
+}
+
+/**
+ * Liste TOUTES les marques d'un restaurant (y compris portefeuille) avec leurs
+ * montants sur la période, pour permettre à l'utilisateur de choisir lesquelles facturer.
+ *
+ * Retourne pour chaque marque :
+ *   - id, nom, plateforme, is_portefeuille (read-only en facturation DropEat)
+ *   - nb_commandes, ca_brut, facturation_estimee, commission_dropeat_estimee
+ *   - eligible_dropeat (true si non-portefeuille ET facturation > 0)
+ */
+export async function listMarquesFacturablesResto(
+  db: D1Database,
+  restaurantId: number,
+  annee: number,
+  mois: number,
+  range?: { debut: string; fin: string }
+): Promise<Array<{
+  marque_id: number
+  marque_nom: string
+  plateforme: string
+  is_portefeuille: number
+  resto_is_portefeuille: number
+  nb_commandes: number
+  ca_brut: number
+  facturation_estimee: number
+  commission_dropeat_estimee: number
+  eligible_dropeat: boolean
+}>> {
+  const { debut, fin } = range
+    ? { debut: range.debut, fin: range.fin }
+    : resolvePeriode({ annee, mois })
+
+  const resto = await db.prepare(
+    'SELECT COALESCE(is_portefeuille_proprietaire, 0) as resto_pf FROM restaurants WHERE id = ?'
+  ).bind(restaurantId).first() as any
+  const restoPf = resto?.resto_pf ? 1 : 0
+
+  const { results } = await db.prepare(`
+    SELECT
+      m.id as marque_id, m.nom as marque_nom,
+      COALESCE(m.plateforme, 'uber_eats') as plateforme,
+      COALESCE(m.is_portefeuille_proprietaire, 0) as is_portefeuille,
+      COUNT(c.id) as nb_commandes,
+      COALESCE(SUM(c.montant_brut), 0) as ca_brut,
+      COALESCE(SUM(c.montant_facture_resto), 0) as facturation_estimee,
+      COALESCE(SUM(c.commission_agent_montant), 0) as commission_agent
+    FROM marques_virtuelles m
+    LEFT JOIN commandes c ON c.marque_id = m.id
+      AND c.date_commande >= ? AND c.date_commande <= ?
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+    WHERE m.restaurant_id = ?
+    GROUP BY m.id
+    ORDER BY m.id
+  `).bind(debut, fin, restaurantId).all() as any
+
+  return (results as any[]).map(r => {
+    const isPf = r.is_portefeuille ? 1 : 0
+    const eligible = !isPf && !restoPf && r.facturation_estimee > 0
+    return {
+      marque_id: r.marque_id,
+      marque_nom: r.marque_nom,
+      plateforme: r.plateforme,
+      is_portefeuille: isPf,
+      resto_is_portefeuille: restoPf,
+      nb_commandes: r.nb_commandes,
+      ca_brut: r.ca_brut,
+      facturation_estimee: r.facturation_estimee,
+      // commission DropEat estimée = facturation totale - commission agent
+      commission_dropeat_estimee: Math.max(0, r.facturation_estimee - r.commission_agent),
+      eligible_dropeat: eligible
+    }
+  })
+}
+
+/**
+ * Liste les marques d'un AGENT avec leurs montants facturables (scope DropEat = commissions standard).
+ * Permet à l'agent de cocher quelles marques facturer dans sa facture commissions.
+ */
+export async function listMarquesFacturablesAgent(
+  db: D1Database,
+  agentId: number,
+  annee: number,
+  mois: number,
+  range?: { debut: string; fin: string }
+): Promise<Array<{
+  marque_id: number
+  marque_nom: string
+  restaurant_id: number
+  restaurant_nom: string
+  plateforme: string
+  is_portefeuille: number
+  resto_is_portefeuille: number
+  nb_commandes: number
+  ca_brut: number
+  commission_agent_estimee: number
+  eligible_dropeat: boolean
+}>> {
+  const { debut, fin } = range
+    ? { debut: range.debut, fin: range.fin }
+    : resolvePeriode({ annee, mois })
+
+  const { results } = await db.prepare(`
+    SELECT
+      m.id as marque_id, m.nom as marque_nom,
+      r.id as restaurant_id, r.nom as restaurant_nom,
+      COALESCE(m.plateforme, 'uber_eats') as plateforme,
+      COALESCE(m.is_portefeuille_proprietaire, 0) as is_portefeuille,
+      COALESCE(r.is_portefeuille_proprietaire, 0) as resto_is_portefeuille,
+      COUNT(c.id) as nb_commandes,
+      COALESCE(SUM(c.montant_brut), 0) as ca_brut,
+      COALESCE(SUM(c.commission_agent_montant), 0) as commission_agent_estimee
+    FROM marques_virtuelles m
+    JOIN restaurants r ON m.restaurant_id = r.id
+    LEFT JOIN commandes c ON c.marque_id = m.id
+      AND c.date_commande >= ? AND c.date_commande <= ?
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+    WHERE r.agent_id = ?
+    GROUP BY m.id
+    ORDER BY r.nom, m.nom
+  `).bind(debut, fin, agentId).all() as any
+
+  return (results as any[]).map(r => {
+    const isPf = r.is_portefeuille ? 1 : 0
+    const restoPf = r.resto_is_portefeuille ? 1 : 0
+    const eligible = !isPf && !restoPf && r.commission_agent_estimee > 0
+    return {
+      marque_id: r.marque_id,
+      marque_nom: r.marque_nom,
+      restaurant_id: r.restaurant_id,
+      restaurant_nom: r.restaurant_nom,
+      plateforme: r.plateforme,
+      is_portefeuille: isPf,
+      resto_is_portefeuille: restoPf,
+      nb_commandes: r.nb_commandes,
+      ca_brut: r.ca_brut,
+      commission_agent_estimee: r.commission_agent_estimee,
+      eligible_dropeat: eligible
+    }
+  })
 }
 
 /**
@@ -359,11 +534,23 @@ export async function buildLignesFactureAgentResto(
   restaurantId: number,
   annee: number,
   mois: number,
-  range?: { debut: string; fin: string }
+  range?: { debut: string; fin: string },
+  opts?: { marques_ids?: number[] }
 ): Promise<LigneCommissionAgent[]> {
   const { debut, fin } = range
     ? { debut: range.debut, fin: range.fin }
     : resolvePeriode({ annee, mois })
+
+  const marquesIds = (opts?.marques_ids || [])
+    .map(Number).filter(n => Number.isFinite(n) && n > 0)
+
+  const extra: string[] = []
+  const params: any[] = [debut, fin, restaurantId, agentId]
+  if (marquesIds.length > 0) {
+    const placeholders = marquesIds.map(() => '?').join(',')
+    extra.push(`AND m.id IN (${placeholders})`)
+    params.push(...marquesIds)
+  }
 
   // On ne prend QUE les marques en portefeuille (marque PF OU resto entier PF)
   // ET on filtre sur restaurant_id + agent_id (sécurité : l'agent ne peut facturer
@@ -389,9 +576,10 @@ export async function buildLignesFactureAgentResto(
         COALESCE(m.is_portefeuille_proprietaire, 0) = 1
         OR COALESCE(r.is_portefeuille_proprietaire, 0) = 1
       )
+      ${extra.join(' ')}
     GROUP BY m.id
     HAVING nb_commandes > 0
-  `).bind(debut, fin, restaurantId, agentId).all() as any
+  `).bind(...params).all() as any
 
   const lignes: LigneCommissionAgent[] = []
   for (const m of results as any[]) {
@@ -477,4 +665,67 @@ export async function listRestosPortefeuilleAvecCommandes(
   `).bind(debut, fin, agentId).all() as any
 
   return results as any[]
+}
+
+/**
+ * Liste les marques en PORTEFEUILLE PROPRIÉTAIRE d'un agent pour un restaurant donné,
+ * avec leurs montants sur la période (pour picker facturation portefeuille agent→resto).
+ */
+export async function listMarquesPortefeuilleResto(
+  db: D1Database,
+  agentId: number,
+  restaurantId: number,
+  annee: number,
+  mois: number,
+  range?: { debut: string; fin: string }
+): Promise<Array<{
+  marque_id: number
+  marque_nom: string
+  plateforme: string
+  is_portefeuille: number
+  resto_is_portefeuille: number
+  nb_commandes: number
+  ca_brut: number
+  facturation_estimee: number
+  eligible: boolean
+}>> {
+  const { debut, fin } = range
+    ? { debut: range.debut, fin: range.fin }
+    : resolvePeriode({ annee, mois })
+
+  const { results } = await db.prepare(`
+    SELECT
+      m.id as marque_id, m.nom as marque_nom,
+      COALESCE(m.plateforme, 'uber_eats') as plateforme,
+      COALESCE(m.is_portefeuille_proprietaire, 0) as is_portefeuille,
+      COALESCE(r.is_portefeuille_proprietaire, 0) as resto_is_portefeuille,
+      COUNT(c.id) as nb_commandes,
+      COALESCE(SUM(c.montant_brut), 0) as ca_brut,
+      COALESCE(SUM(c.montant_facture_resto), 0) as facturation_estimee
+    FROM marques_virtuelles m
+    JOIN restaurants r ON m.restaurant_id = r.id
+    LEFT JOIN commandes c ON c.marque_id = m.id
+      AND c.date_commande >= ? AND c.date_commande <= ?
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+    WHERE r.id = ?
+      AND r.agent_id = ?
+      AND (
+        COALESCE(m.is_portefeuille_proprietaire, 0) = 1
+        OR COALESCE(r.is_portefeuille_proprietaire, 0) = 1
+      )
+    GROUP BY m.id
+    ORDER BY m.nom
+  `).bind(debut, fin, restaurantId, agentId).all() as any
+
+  return (results as any[]).map(r => ({
+    marque_id: r.marque_id,
+    marque_nom: r.marque_nom,
+    plateforme: r.plateforme,
+    is_portefeuille: r.is_portefeuille ? 1 : 0,
+    resto_is_portefeuille: r.resto_is_portefeuille ? 1 : 0,
+    nb_commandes: r.nb_commandes,
+    ca_brut: r.ca_brut,
+    facturation_estimee: r.facturation_estimee,
+    eligible: r.nb_commandes > 0 && r.facturation_estimee > 0
+  }))
 }

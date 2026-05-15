@@ -52,6 +52,45 @@ Application web complète pour gérer le suivi des commissions de votre activit�
 
 ## 🆕 Nouveautés (session courante)
 
+### 💰 Refonte complète du système de facturation (Phase B — modules 1→5)
+
+**Problème résolu** : l'ancien écran "Facturer un restaurant" listait uniquement les restaurants sans laisser choisir les marques. La nouvelle facturation est multi-marques, supporte le mode groupé/séparé, et sépare les commissions MLM dans un scope dédié.
+
+#### 3 types de factures (toujours présents mais réorganisés)
+1. **`agent_to_dropeat` — Commissions standard** : numéro `AGT-YYYY-MM-NNNN`. Les commissions propres de l'agent sur ses marques (hors portefeuille).
+2. **`agent_to_dropeat` — Commissions MLM** *(nouveau scope séparé)* : numéro `AGT-MLM-YYYY-MM-NNNN`. Les commissions N+1 / N+2 issues des filleuls. **Toujours facturées à part** pour traçabilité réglementaire.
+3. **`agent_to_resto` — Portefeuille 100%** : numéro `PA-{agent_id}-YYYY-NNNN`. Sur la 5e marque/resto en portefeuille propriétaire, l'agent facture **directement** le restaurant.
+4. **`dropeat_to_resto` — Commission DropEat → restaurant** : numéro `DRP-YYYY-MM-RNNN`. Facturation DropEat aux restaurants (hors portefeuille).
+
+#### Nouveautés clés
+- **Picker de marques partagé** (`marquesPicker`) : tableau interactif avec cases à cocher, totaux dynamiques, et marques en portefeuille **grisées + cliquables pour vérification** (avec icône cadenas).
+- **Mode de facturation** (radio buttons) sur tous les modals :
+  - **1 facture groupée** (défaut) : toutes les marques cochées dans une seule facture.
+  - **N factures séparées** : 1 facture par marque (numérotation indépendante).
+- **Assistant 3 étapes** côté superadmin pour "Facturer un restaurant" : Restaurant + Période → Marques → Aperçu/Émission.
+- **Vue facture (`factureViewerModal`)** : les lignes sont **regroupées visuellement par marque** avec sous-totaux et code couleur (bleu = marque, violet = MLM).
+- **Colonne "À facturer" sur la liste admin des restaurants** : badge `À facturer` / `Brouillon` / `En cours` / `Facturée` selon état + montant HT calculé pour le mois en cours, plus un bouton raccourci "Facturer" qui pré-sélectionne le resto dans l'assistant.
+
+#### Endpoints backend ajoutés/modifiés (`/api/factures/...`)
+- `POST /agent/preview` & `/agent/create` : nouveaux paramètres `marques_ids[]`, `scope` (`standard` / `mlm` / `all`), `split_by_marque`.
+- `POST /resto/preview` *(nouveau)* : aperçu DropEat→resto avec sélection de marques.
+- `POST /resto/create` : nouveaux paramètres `marques_ids[]` + `split_by_marque`.
+- `POST /agent-resto/preview` & `/agent-resto/create` : idem (mode portefeuille).
+- `GET /resto/marques-facturables?restaurant_id=&...` *(nouveau)* — superadmin.
+- `GET /agent/marques-facturables-self?...` *(nouveau)* — agent.
+- `GET /agent-resto/marques-portefeuille?restaurant_id=&...` *(nouveau)* — agent.
+- `GET /resto/a-facturer-ce-mois?annee=&mois=` *(nouveau)* — agrégat utilisé par la liste des restos.
+
+#### Règles préservées
+- **Numérotation réglementaire (art. 242 nonies A CGI)** : continue et sans trou, par scope et par émetteur.
+- **Anti-doublons** : actif uniquement si aucun filtre marque/scope appliqué (sinon on autorise plusieurs factures sur la même période avec ciblages différents).
+- **Mentions légales** France (art. 293 B CGI franchise base) / UK (Late Payment Act 1998) inchangées.
+
+#### Migration 0018 — Source of truth Sabrina/Fabien/Elbac/Greg
+Alignement BDD pour 4 commerciaux (Sabrina Hadri, Fabien Rosso, Elbac Haidar Mohamed, Gregory Hadri) : 7 restaurants, 7 marques, 8 comptes plateformes (manager + backup Uber). Commit `1bdfa90`.
+
+---
+
 ### 🏁 Module CHALLENGES commerciaux (migration 0012 + seed 0013)
 - **Superadmin** : CRUD complet des challenges temporaires (`admin-challenges`)
   - Période, type d'objectif (`restaurants` / `marques` / `restaurants_ou_marques`)

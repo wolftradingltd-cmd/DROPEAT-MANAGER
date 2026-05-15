@@ -681,19 +681,54 @@ PAGES['tree'] = async (c) => {
 
 // --- Restaurants ---
 PAGES['restaurants'] = async (c) => {
-  const [r, u] = await Promise.all([api.get('/admin/restaurants'), api.get('/admin/users')])
+  const now = new Date()
+  const curAnnee = now.getFullYear()
+  const curMois = now.getMonth() + 1
+  const [r, u, fact] = await Promise.all([
+    api.get('/admin/restaurants'),
+    api.get('/admin/users'),
+    api.get(`/factures/resto/a-facturer-ce-mois?annee=${curAnnee}&mois=${curMois}`).catch(() => ({ data: { map: {} } }))
+  ])
   const restos = r.data.restaurants
   const agents = u.data.users.filter(x => x.role === 'agent')
+  const facturableMap = fact.data.map || {}
+
+  function renderAFacturer(restoId) {
+    const info = facturableMap[String(restoId)]
+    if (!info) return '<span class="text-muted">—</span>'
+    const total = Number(info.total_ht || 0)
+    const fact = info.factures_existantes || []
+    if (total <= 0 && fact.length === 0) {
+      return '<span class="text-muted" style="font-size:.8rem">0 €</span>'
+    }
+    let badge = ''
+    if (fact.length > 0) {
+      const statuts = fact.map(f => f.statut)
+      const aPay = statuts.some(s => s === 'envoyee' || s === 'validee')
+      const payee = statuts.every(s => s === 'payee')
+      if (payee) badge = `<span class="badge badge-success" style="font-size:.65rem" title="${fact.map(f => f.numero).join(', ')}">✓ Facturée</span>`
+      else if (aPay) badge = `<span class="badge badge-info" style="font-size:.65rem" title="${fact.map(f => f.numero).join(', ')}">En cours</span>`
+      else badge = `<span class="badge" style="background:#fef3c7;color:#92400e;font-size:.65rem" title="${fact.map(f => f.numero).join(', ')}">Brouillon</span>`
+    } else if (total > 0) {
+      badge = `<span class="badge" style="background:#fee2e2;color:#991b1b;font-size:.65rem" title="Aucune facture émise ce mois">À facturer</span>`
+    }
+    return `<div style="line-height:1.2"><strong style="font-size:.85rem;color:${total > 0 ? '#1d4ed8' : '#6b7280'}">${fmtEUR(total)}</strong><br>${badge}</div>`
+  }
+
   c.innerHTML = `
     <div class="page-header">
-      <div><h1>Restaurants</h1><div class="subtitle">${restos.length} restaurants partenaires</div></div>
-      <button class="btn btn-primary" id="btnNew"><i class="fas fa-plus"></i> Nouveau restaurant</button>
+      <div><h1>Restaurants</h1><div class="subtitle">${restos.length} restaurants partenaires · Colonne « À facturer » = ${monthsFR[curMois - 1]} ${curAnnee}</div></div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-secondary" id="goBilling" title="Aller à l'écran de facturation"><i class="fas fa-file-export"></i> Facturer un restaurant</button>
+        <button class="btn btn-primary" id="btnNew"><i class="fas fa-plus"></i> Nouveau restaurant</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr>
           <th>Nom</th><th>Ville</th><th>Agent</th><th>Rang</th><th>Statut</th>
           <th class="text-right">Marques</th><th class="text-right">Cmds</th><th class="text-right">CA</th>
+          <th class="text-right" style="background:#eff6ff" title="Total facturable DropEat→Resto pour ${monthsFR[curMois - 1]} ${curAnnee}">À facturer ${monthsFR[curMois - 1].substring(0, 3)}.</th>
           <th class="text-right">Actions</th>
         </tr></thead>
         <tbody>${restos.map(r => `
@@ -709,7 +744,9 @@ PAGES['restaurants'] = async (c) => {
             <td class="text-right">${r.nb_marques}${r.nb_marques_portefeuille ? ` <small class="text-muted">(${r.nb_marques_portefeuille}P)</small>` : ''}</td>
             <td class="text-right">${fmtNum(r.nb_commandes)}</td>
             <td class="text-right"><strong>${fmtEUR(r.ca_total)}</strong></td>
+            <td class="text-right" style="background:#f8fafc">${renderAFacturer(r.id)}</td>
             <td class="text-right">
+              <button class="btn btn-sm btn-primary" data-bill="${r.id}" title="Facturer ce restaurant"><i class="fas fa-file-invoice"></i></button>
               <button class="btn btn-sm btn-secondary" data-detail="${r.id}"><i class="fas fa-eye"></i></button>
               <button class="btn btn-sm btn-secondary" data-edit="${r.id}"><i class="fas fa-pen"></i></button>
               <button class="btn btn-sm btn-danger" data-del="${r.id}"><i class="fas fa-trash"></i></button>
@@ -718,9 +755,16 @@ PAGES['restaurants'] = async (c) => {
       </table>
     </div>`
   document.getElementById('btnNew').onclick = () => restaurantModal(null, agents)
+  const goBilling = c.querySelector('#goBilling')
+  if (goBilling) goBilling.onclick = () => navigate('admin-factures-resto')
   c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
     const x = restos.find(r => r.id === parseInt(b.dataset.edit))
     restaurantModal(x, agents)
+  })
+  c.querySelectorAll('[data-bill]').forEach(b => b.onclick = () => {
+    // Passer l'ID au localStorage pour pré-sélection puis naviguer
+    try { sessionStorage.setItem('billing_preselect_resto', b.dataset.bill) } catch {}
+    navigate('admin-factures-resto')
   })
   c.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => restaurantDetailModal(parseInt(b.dataset.detail), agents))
   c.querySelectorAll('[data-del]').forEach(b => b.onclick = () => confirmDialog(
@@ -7233,13 +7277,62 @@ async function factureViewerModal(id) {
       </div>
       <table class="invoice-table">
         <thead><tr><th>#</th><th>Libellé</th><th class="text-right">Qté</th><th class="text-right">P.U.</th><th class="text-right">Montant HT</th></tr></thead>
-        <tbody>${lignes.map(l => `<tr>
-          <td>${l.ordre}</td>
-          <td><strong>${escapeHtml(l.libelle)}</strong>${l.description ? `<br><small class="text-muted">${escapeHtml(l.description)}</small>` : ''}</td>
-          <td class="text-right">${fmtNum(l.quantite)}</td>
-          <td class="text-right">${fmtEUR(l.prix_unitaire).replace(' €', ' ' + sym)}</td>
-          <td class="text-right">${fmtEUR(l.montant_ht).replace(' €', ' ' + sym)}</td>
-        </tr>`).join('')}</tbody>
+        <tbody>${(function() {
+          // Regrouper visuellement par marque (clé marque_id), avec lignes "sans marque" (MLM) en dernier
+          const groupes = new Map()
+          for (const l of lignes) {
+            const key = l.marque_id ? `m_${l.marque_id}` : '_no_marque'
+            if (!groupes.has(key)) groupes.set(key, { marque_id: l.marque_id || null, lignes: [], total: 0 })
+            const g = groupes.get(key)
+            g.lignes.push(l)
+            g.total += parseFloat(l.montant_ht || 0)
+          }
+          // Si une seule marque (ou aucune), rendre tel quel sans en-têtes de groupe
+          if (groupes.size <= 1) {
+            return lignes.map(l => `<tr>
+              <td>${l.ordre}</td>
+              <td><strong>${escapeHtml(l.libelle)}</strong>${l.description ? `<br><small class="text-muted">${escapeHtml(l.description)}</small>` : ''}</td>
+              <td class="text-right">${fmtNum(l.quantite)}</td>
+              <td class="text-right">${fmtEUR(l.prix_unitaire).replace(' €', ' ' + sym)}</td>
+              <td class="text-right">${fmtEUR(l.montant_ht).replace(' €', ' ' + sym)}</td>
+            </tr>`).join('')
+          }
+          // Sinon, afficher des entêtes de groupe par marque
+          const groupesArr = Array.from(groupes.values())
+          // Trier : marques nommées d'abord, puis MLM/sans marque
+          groupesArr.sort((a, b) => {
+            if (a.marque_id === null) return 1
+            if (b.marque_id === null) return -1
+            return 0
+          })
+          return groupesArr.map(g => {
+            // Déduire un libellé de groupe à partir des libellés des lignes (formats type "Catégorie — Marque" ou "Catégorie — Marque (resto)")
+            let label = 'MLM (N+1 / N+2)'
+            if (g.marque_id) {
+              const sample = g.lignes[0]?.libelle || ''
+              const parts = sample.split('—')
+              label = parts.length > 1 ? parts.slice(1).join('—').trim() : `Marque #${g.marque_id}`
+            }
+            const headerColor = g.marque_id ? '#eff6ff' : '#f5f3ff'
+            const headerTxt = g.marque_id ? '#1d4ed8' : '#9333ea'
+            const icon = g.marque_id ? 'fa-tag' : 'fa-sitemap'
+            return `
+              <tr style="background:${headerColor};color:${headerTxt}">
+                <td colspan="5" style="padding:.45rem .6rem;font-weight:bold;font-size:.9rem">
+                  <i class="fas ${icon}"></i> ${escapeHtml(label)}
+                  <span style="float:right;font-family:monospace">Sous-total : ${fmtEUR(g.total).replace(' €', ' ' + sym)}</span>
+                </td>
+              </tr>
+              ${g.lignes.map(l => `<tr>
+                <td>${l.ordre}</td>
+                <td>${escapeHtml(l.libelle)}${l.description ? `<br><small class="text-muted">${escapeHtml(l.description)}</small>` : ''}</td>
+                <td class="text-right">${fmtNum(l.quantite)}</td>
+                <td class="text-right">${fmtEUR(l.prix_unitaire).replace(' €', ' ' + sym)}</td>
+                <td class="text-right">${fmtEUR(l.montant_ht).replace(' €', ' ' + sym)}</td>
+              </tr>`).join('')}
+            `
+          }).join('')
+        })()}</tbody>
       </table>
       <div class="invoice-totals">
         <div class="invoice-totals-row"><span>Total HT</span><span>${fmtEUR(f.montant_ht).replace(' €', ' ' + sym)}</span></div>
@@ -7303,32 +7396,37 @@ PAGES['a-factures'] = async (c) => {
     api.get('/factures?type=agent_to_dropeat'),
     api.get('/factures?type=agent_to_resto').catch(() => ({ data: { factures: [] } }))
   ])
-  const facturesDr = aDr.data.factures || []
+  const allDr = aDr.data.factures || []
+  // Séparer factures standard vs MLM (par préfixe numéro AGT-MLM-)
+  const facturesDr = allDr.filter(f => !String(f.numero || '').startsWith('AGT-MLM-'))
+  const facturesMlm = allDr.filter(f => String(f.numero || '').startsWith('AGT-MLM-'))
   const facturesRe = aRe.data.factures || []
 
   c.innerHTML = `
     <div class="page-header">
       <div><h1><i class="fas fa-file-invoice-dollar"></i> Mes factures</h1>
-        <div class="subtitle">Vos commissions DropEat + vos facturations directes (portefeuille 100%)</div></div>
-      <div style="display:flex;gap:.5rem">
-        <button class="btn btn-primary" id="newFacture"><i class="fas fa-plus"></i> Facture commissions (→ DropEat)</button>
+        <div class="subtitle">Vos commissions DropEat (standard + MLM séparé) + vos facturations directes (portefeuille 100%)</div></div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn btn-primary" id="newFacture"><i class="fas fa-plus"></i> Facture commissions standard</button>
+        <button class="btn" style="background:#9333ea;color:#fff" id="newFactureMlm"><i class="fas fa-sitemap"></i> Facture MLM (N+1 / N+2)</button>
         <button class="btn btn-warning" id="newFactureResto"><i class="fas fa-star"></i> Facture portefeuille (→ restaurant)</button>
       </div>
     </div>
 
-    <div class="card" style="background:#fffbeb;border-left:3px solid #ea8a00;margin-bottom:1rem">
+    <div class="card" style="background:#eff6ff;border-left:3px solid #1d4ed8;margin-bottom:1rem">
       <div style="display:flex;align-items:start;gap:.6rem;font-size:.88rem">
-        <i class="fas fa-circle-info" style="color:#ea8a00;font-size:1.1rem;margin-top:.15rem"></i>
+        <i class="fas fa-circle-info" style="color:#1d4ed8;font-size:1.1rem;margin-top:.15rem"></i>
         <div>
-          <strong>Deux types de facturation :</strong><br>
-          <span style="color:#475569"><strong>1. Vers DropEat</strong> — vos commissions propres + N+1 + N+2 sur toutes vos ventes <em>hors portefeuille</em>.</span><br>
-          <span style="color:#475569"><strong>2. Vers le restaurant (Portefeuille 100%)</strong> — sur la 5e marque ou le 5e restaurant en portefeuille propriétaire, vous facturez <strong>directement</strong> le restaurant à 100% (DropEat ne touche rien, aucune remontée N+1/N+2).</span>
+          <strong>Trois types de facturation :</strong><br>
+          <span style="color:#475569"><strong>1. Commissions standard (→ DropEat)</strong> — vos commissions propres sur vos marques <em>hors portefeuille</em>. Préfixe <code>AGT-YYYY-MM-NNNN</code>.</span><br>
+          <span style="color:#475569"><strong>2. Commissions MLM (→ DropEat)</strong> — vos commissions N+1 (filleuls directs) + N+2 (sous-filleuls), <strong>facturées à part</strong>. Préfixe <code>AGT-MLM-YYYY-MM-NNNN</code>.</span><br>
+          <span style="color:#475569"><strong>3. Portefeuille 100% (→ restaurant)</strong> — sur la 5e marque/resto en portefeuille propriétaire, vous facturez <strong>directement</strong> le restaurant. DropEat ne touche rien.</span>
         </div>
       </div>
     </div>
 
     <div class="card" style="margin-bottom:1rem">
-      <div class="card-title"><i class="fas fa-building"></i> Factures de commissions (→ DropEat) — ${facturesDr.length}</div>
+      <div class="card-title"><i class="fas fa-building"></i> Factures de commissions standard (→ DropEat) — ${facturesDr.length}</div>
       <div class="table-wrap"><table class="data-table">
         <thead><tr><th>Numéro</th><th>Période</th><th>Émission</th><th>Échéance</th><th class="text-right">HT</th><th class="text-right">TTC</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
         <tbody>${facturesDr.length ? facturesDr.map(f => `<tr>
@@ -7344,7 +7442,28 @@ PAGES['a-factures'] = async (c) => {
             ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-primary" data-send="${f.id}" title="Envoyer pour validation"><i class="fas fa-paper-plane"></i></button>` : ''}
             ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-danger" data-del="${f.id}" title="Supprimer"><i class="fas fa-trash"></i></button>` : ''}
           </td>
-        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucune facture. Cliquez sur « Facture commissions ».</td></tr>'}</tbody>
+        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucune facture standard. Cliquez sur « Facture commissions standard ».</td></tr>'}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card" style="margin-bottom:1rem;border-left:3px solid #9333ea">
+      <div class="card-title"><i class="fas fa-sitemap" style="color:#9333ea"></i> Factures commissions MLM (N+1 / N+2 → DropEat) — ${facturesMlm.length}</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Numéro</th><th>Période</th><th>Émission</th><th>Échéance</th><th class="text-right">HT</th><th class="text-right">TTC</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>${facturesMlm.length ? facturesMlm.map(f => `<tr>
+          <td><strong style="font-family:monospace;color:#9333ea">${escapeHtml(f.numero)}</strong></td>
+          <td>${monthsFR[f.periode_mois-1]} ${f.periode_annee}</td>
+          <td>${fmtDate(f.date_emission)}</td>
+          <td>${fmtDate(f.date_echeance)}</td>
+          <td class="text-right">${fmtEUR(f.montant_ht)}</td>
+          <td class="text-right"><strong>${fmtEUR(f.montant_ttc)}</strong></td>
+          <td>${factureStatutBadge(f.statut)}</td>
+          <td class="text-right" style="white-space:nowrap">
+            <button class="btn btn-sm btn-secondary" data-view="${f.id}" title="Voir / PDF"><i class="fas fa-eye"></i></button>
+            ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-primary" data-send="${f.id}" title="Envoyer pour validation"><i class="fas fa-paper-plane"></i></button>` : ''}
+            ${f.statut === 'brouillon' ? `<button class="btn btn-sm btn-danger" data-del="${f.id}" title="Supprimer"><i class="fas fa-trash"></i></button>` : ''}
+          </td>
+        </tr>`).join('') : '<tr><td colspan="8" class="text-center text-muted">Aucune facture MLM. Si vous avez des filleuls actifs, cliquez sur « Facture MLM ».</td></tr>'}</tbody>
       </table></div>
     </div>
 
@@ -7377,6 +7496,7 @@ PAGES['a-factures'] = async (c) => {
     </div>
   `
   c.querySelector('#newFacture').onclick = () => factureCreateAgentModal(() => navigate('a-factures'))
+  c.querySelector('#newFactureMlm').onclick = () => factureCreateAgentMLMModal(() => navigate('a-factures'))
   c.querySelector('#newFactureResto').onclick = () => factureCreateAgentRestoModal(() => navigate('a-factures'))
   c.querySelectorAll('[data-view]').forEach(b => b.onclick = () => factureViewerModal(b.dataset.view))
   c.querySelectorAll('[data-send]').forEach(b => b.onclick = () => confirmDialog(
@@ -7511,31 +7631,60 @@ function periodeSelector(prefix) {
 
 function factureCreateAgentRestoModal(onSuccess) {
   const ps = periodeSelector('fr')
+  let picker = null
+  let currentRestoNom = ''
   const m = modal('<i class="fas fa-star" style="color:#ea8a00"></i> Facture directe portefeuille (→ restaurant)', `
     <div style="background:#fffbeb;border-left:3px solid #ea8a00;padding:.7rem;border-radius:6px;margin-bottom:1rem;font-size:.85rem">
       <strong>Règle d'or :</strong> sur la 5e marque ou le 5e restaurant en <strong>portefeuille propriétaire</strong>,
       vous facturez <strong>directement le restaurant à 100%</strong>. DropEat ne touche rien, aucune commission N+1/N+2.
     </div>
-    ${ps.html}
-    <div class="form-grid">
-      <div class="form-group" style="grid-column:1/-1">
-        <label>Restaurant éligible <span class="req">*</span></label>
-        <select id="frResto" required>
-          <option value="">— Choisissez la période puis « Charger restos éligibles » —</option>
-        </select>
-        <small class="text-muted">Seuls les restaurants ayant au moins une marque/restaurant en portefeuille avec des commandes sur la période sont listés.</small>
+
+    <!-- ÉTAPE 1 : Période + Restaurant -->
+    <div style="margin-bottom:.8rem">
+      <strong style="font-size:.9rem">1. Période & restaurant</strong>
+      ${ps.html}
+      <div class="form-grid" style="margin-top:.4rem">
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Restaurant éligible <span class="req">*</span></label>
+          <select id="frResto" required>
+            <option value="">— Chargement —</option>
+          </select>
+          <small class="text-muted">Seuls les restaurants ayant au moins une marque/resto en portefeuille avec ventes sur la période sont listés.</small>
+        </div>
+      </div>
+      <div style="display:flex;gap:.5rem;margin-top:.5rem;align-items:center;flex-wrap:wrap">
+        <button type="button" class="btn btn-secondary btn-sm" id="frLoadRestos"><i class="fas fa-sync"></i> Recharger</button>
+        <button type="button" class="btn btn-primary btn-sm" id="frLoadMarques"><i class="fas fa-tags"></i> Charger les marques</button>
+        <div style="margin-left:auto;font-size:.8rem" class="text-muted">Période : <strong id="frLabel"></strong></div>
       </div>
     </div>
-    <div style="display:flex;gap:.5rem;margin:.6rem 0;flex-wrap:wrap">
-      <button type="button" class="btn btn-secondary btn-sm" id="frLoadRestos"><i class="fas fa-sync"></i> Charger restos éligibles</button>
-      <button type="button" class="btn btn-info btn-sm" id="frPreviewBtn"><i class="fas fa-eye"></i> Aperçu lignes</button>
-      <div style="margin-left:auto;align-self:center;font-size:.8rem" class="text-muted">Période : <strong id="frLabel"></strong></div>
+
+    <!-- ÉTAPE 2 : Marques + mode -->
+    <div id="frStep2" style="display:none;margin-bottom:.8rem">
+      <strong style="font-size:.9rem">2. Marques portefeuille à facturer</strong>
+      <div id="frMarquesBox"></div>
+      <div class="card" style="background:#fef9c3;margin-top:.6rem;padding:.6rem">
+        <strong style="font-size:.85rem">Mode de facturation :</strong>
+        <div style="display:flex;flex-direction:column;gap:.3rem;margin-top:.3rem;font-size:.85rem">
+          <label style="cursor:pointer"><input type="radio" name="frMode" value="groupee" checked> <strong>1 facture groupée</strong> — toutes les marques portefeuille (recommandé)</label>
+          <label style="cursor:pointer"><input type="radio" name="frMode" value="split"> <strong>N factures séparées</strong> — 1 facture par marque</label>
+        </div>
+      </div>
+      <div style="display:flex;gap:.5rem;margin-top:.6rem">
+        <button type="button" class="btn btn-info btn-sm" id="frPreviewBtn"><i class="fas fa-eye"></i> Aperçu</button>
+      </div>
     </div>
-    <div id="frPreview" style="margin:1rem 0;padding:1rem;background:#f9fafb;border-radius:6px;display:none"></div>
-    <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="frNotes" rows="2"></textarea></div>
+
+    <!-- ÉTAPE 3 : Aperçu + création -->
+    <div id="frStep3" style="display:none">
+      <strong style="font-size:.9rem">3. Aperçu & validation</strong>
+      <div id="frPreview" style="margin:.5rem 0;padding:1rem;background:#f9fafb;border-radius:6px"></div>
+      <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="frNotes" rows="2"></textarea></div>
+    </div>
+
     <div class="form-actions">
       <button type="button" class="btn btn-secondary" data-close>Annuler</button>
-      <button type="button" class="btn btn-primary" id="frCreate"><i class="fas fa-file-invoice"></i> Créer brouillon</button>
+      <button type="button" class="btn btn-primary" id="frCreate" disabled><i class="fas fa-file-invoice"></i> Créer la/les facture(s)</button>
     </div>
   `)
   m.el.querySelector('[data-close]').onclick = () => m.close()
@@ -7544,7 +7693,13 @@ function factureCreateAgentRestoModal(onSuccess) {
     const p = ps.getPeriode(m.el)
     m.el.querySelector('#frLabel').textContent = ps.periodeLabel(p)
   }
-  ps.attach(m.el, () => { updateLabel(); loadRestos() })
+  function resetSteps() {
+    m.el.querySelector('#frStep2').style.display = 'none'
+    m.el.querySelector('#frStep3').style.display = 'none'
+    m.el.querySelector('#frCreate').disabled = true
+    picker = null
+  }
+  ps.attach(m.el, () => { updateLabel(); resetSteps(); loadRestos() })
   updateLabel()
 
   async function loadRestos() {
@@ -7553,74 +7708,178 @@ function factureCreateAgentRestoModal(onSuccess) {
       const { data } = await api.get(`/factures/agent-resto/restos-eligibles?${ps.toQueryString(p)}`)
       const sel = m.el.querySelector('#frResto')
       sel.innerHTML = '<option value="">— Choisir —</option>' + (data.restos || []).map(r =>
-        `<option value="${r.restaurant_id}">${escapeHtml(r.restaurant_nom)} — ${r.nb_commandes} cmd · CA ${fmtEUR(r.ca)} · à facturer ${fmtEUR(r.montant_facturable)}${r.resto_pf ? ' [Resto P]' : ''}${r.nb_marques_pf ? ` [${r.nb_marques_pf} marque(s) P]` : ''}</option>`
+        `<option value="${r.restaurant_id}" data-nom="${escapeHtml(r.restaurant_nom)}">${escapeHtml(r.restaurant_nom)} — ${r.nb_commandes} cmd · CA ${fmtEUR(r.ca)} · à facturer ${fmtEUR(r.montant_facturable)}${r.resto_pf ? ' [Resto P]' : ''}${r.nb_marques_pf ? ` [${r.nb_marques_pf} marque(s) P]` : ''}</option>`
       ).join('')
       if (!data.restos?.length) {
-        toast('Aucun restaurant éligible sur cette période (pas de marque/resto en portefeuille avec ventes)', 'error', 4500)
+        toast('Aucun restaurant éligible sur cette période (pas de marque/resto en portefeuille avec ventes)', 'info', 4500)
       } else {
         toast(`${data.restos.length} restaurant(s) éligible(s)`)
       }
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
   m.el.querySelector('#frLoadRestos').onclick = loadRestos
-  // Auto-load au démarrage
+  m.el.querySelector('#frResto').onchange = resetSteps
   loadRestos()
 
-  m.el.querySelector('#frPreviewBtn').onclick = async () => {
-    const p = ps.getPeriode(m.el)
+  m.el.querySelector('#frLoadMarques').onclick = async () => {
     const rid = parseInt(m.el.querySelector('#frResto').value)
     if (!rid) return toast('Sélectionnez un restaurant', 'error')
+    const opt = m.el.querySelector('#frResto').selectedOptions[0]
+    currentRestoNom = opt?.dataset?.nom || ''
+    const p = ps.getPeriode(m.el)
     try {
-      const body = { restaurant_id: rid, ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }) }
-      const { data } = await api.post('/factures/agent-resto/preview', body)
-      const box = m.el.querySelector('#frPreview')
-      box.style.display = 'block'
-      box.innerHTML = data.lignes.length ? `
-        <strong><i class="fas fa-star" style="color:#ea8a00"></i> Aperçu — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
-        <div class="text-muted" style="font-size:.78rem;margin:.3rem 0 .5rem 0">Restaurant : <strong>${escapeHtml(data.restaurant.nom)}</strong> · Période : ${escapeHtml(data.periode.label || ps.periodeLabel(p))}</div>
-        <table class="data-table" style="font-size:.8rem">
-          <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">HT</th></tr></thead>
-          <tbody>${data.lignes.map(l => `<tr>
-            <td>${escapeHtml(l.libelle)}<br><small class="text-muted">${escapeHtml(l.description)}</small></td>
-            <td class="text-right">${fmtNum(l.quantite)}</td>
-            <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
-          </tr>`).join('')}</tbody>
-        </table>
-      ` : '<div class="text-muted">Aucun encaissement portefeuille à facturer pour cette période.</div>'
+      const q = ps.toQueryString(p)
+      const { data } = await api.get(`/factures/agent-resto/marques-portefeuille?restaurant_id=${rid}&${q}`)
+      const marques = data.marques || []
+      picker = marquesPicker({
+        uid: 'fr', mode: 'agent_resto', marques,
+        onChange: () => {}
+      })
+      const box = m.el.querySelector('#frMarquesBox')
+      box.innerHTML = picker.html
+      picker.attach(box)
+      m.el.querySelector('#frStep2').style.display = 'block'
+      m.el.querySelector('#frStep3').style.display = 'none'
+      m.el.querySelector('#frCreate').disabled = true
+      if (!marques.length) {
+        toast('Aucune marque portefeuille à facturer pour ce restaurant.', 'info', 4500)
+      } else {
+        toast(`${marques.length} marque(s) portefeuille trouvée(s)`)
+      }
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
-  m.el.querySelector('#frCreate').onclick = async () => {
-    const p = ps.getPeriode(m.el)
+
+  m.el.querySelector('#frPreviewBtn').onclick = async () => {
+    if (!picker) return toast('Cliquez d\'abord sur « Charger les marques »', 'error')
+    const box = m.el.querySelector('#frMarquesBox')
+    const ids = picker.getSelected(box)
     const rid = parseInt(m.el.querySelector('#frResto').value)
-    const notes = m.el.querySelector('#frNotes').value
     if (!rid) return toast('Sélectionnez un restaurant', 'error')
+    const p = ps.getPeriode(m.el)
+    const mode = m.el.querySelector('input[name="frMode"]:checked').value
+    const splitByMarque = mode === 'split'
     try {
-      const body = { restaurant_id: rid, notes, ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }) }
+      const body = {
+        restaurant_id: rid,
+        marques_ids: ids,
+        split_by_marque: splitByMarque,
+        ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin })
+      }
+      const { data } = await api.post('/factures/agent-resto/preview', body)
+      const previewBox = m.el.querySelector('#frPreview')
+      if (!data.lignes.length) {
+        previewBox.innerHTML = '<div class="text-muted">Aucun encaissement portefeuille à facturer avec ces filtres.</div>'
+        m.el.querySelector('#frCreate').disabled = true
+      } else if (splitByMarque && data.groupes) {
+        previewBox.innerHTML = `
+          <strong><i class="fas fa-layer-group" style="color:#ea8a00"></i> Mode séparé — ${data.groupes.length} facture(s) à créer — Total HT : ${fmtEUR(data.total)}</strong>
+          <div class="text-muted" style="font-size:.78rem;margin:.3rem 0">Restaurant : <strong>${escapeHtml(data.restaurant.nom)}</strong></div>
+          <table class="data-table" style="font-size:.8rem">
+            <thead><tr><th>Facture</th><th class="text-right">Lignes</th><th class="text-right">HT</th></tr></thead>
+            <tbody>${data.groupes.map(g => `<tr>
+              <td><strong>${escapeHtml(g.libelle)}</strong></td>
+              <td class="text-right">${g.lignes.length}</td>
+              <td class="text-right"><strong>${fmtEUR(g.total_ht)}</strong></td>
+            </tr>`).join('')}</tbody>
+          </table>`
+        m.el.querySelector('#frCreate').disabled = false
+      } else {
+        previewBox.innerHTML = `
+          <strong><i class="fas fa-star" style="color:#ea8a00"></i> Facture groupée — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
+          <div class="text-muted" style="font-size:.78rem;margin:.3rem 0">Restaurant : <strong>${escapeHtml(data.restaurant.nom)}</strong></div>
+          <table class="data-table" style="font-size:.8rem">
+            <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">HT</th></tr></thead>
+            <tbody>${data.lignes.map(l => `<tr>
+              <td>${escapeHtml(l.libelle)}<br><small class="text-muted">${escapeHtml(l.description)}</small></td>
+              <td class="text-right">${fmtNum(l.quantite)}</td>
+              <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
+            </tr>`).join('')}</tbody>
+          </table>`
+        m.el.querySelector('#frCreate').disabled = false
+      }
+      m.el.querySelector('#frStep3').style.display = 'block'
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+
+  m.el.querySelector('#frCreate').onclick = async () => {
+    if (!picker) return toast('Chargez les marques puis générez l\'aperçu', 'error')
+    const box = m.el.querySelector('#frMarquesBox')
+    const ids = picker.getSelected(box)
+    const rid = parseInt(m.el.querySelector('#frResto').value)
+    if (!rid) return toast('Sélectionnez un restaurant', 'error')
+    const p = ps.getPeriode(m.el)
+    const mode = m.el.querySelector('input[name="frMode"]:checked').value
+    const splitByMarque = mode === 'split'
+    const notes = m.el.querySelector('#frNotes').value
+    try {
+      const body = {
+        restaurant_id: rid,
+        marques_ids: ids,
+        split_by_marque: splitByMarque,
+        notes,
+        ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin })
+      }
       const { data } = await api.post('/factures/agent-resto/create', body)
-      toast('Facture créée : ' + data.numero)
+      if (data.mode === 'split_by_marque') {
+        toast(`${data.nb_factures} facture(s) créée(s) — Total HT : ${fmtEUR(data.total_ht)}`)
+      } else {
+        toast('Facture créée : ' + data.numero)
+      }
       m.close()
       onSuccess && onSuccess()
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
 }
 
+// ============================================================
+// Modal AGENT → DROPEAT — Facture de commissions standard (par marque)
+// scope='standard' implicite (pas de MLM ici, MLM = modal séparé)
+// ============================================================
 function factureCreateAgentModal(onSuccess) {
   const ps = periodeSelector('fc')
-  const m = modal('<i class="fas fa-file-invoice"></i> Nouvelle facture de commissions (→ DropEat)', `
-    <p class="text-muted" style="font-size:.85rem;margin-bottom:.6rem">
-      <i class="fas fa-circle-info"></i> Cette facture inclura automatiquement vos commissions propres, N+1 (vos filleuls directs) et N+2 (sous-filleuls) pour la période choisie.
-      <strong>Les commandes en portefeuille propriétaire sont exclues</strong> (à facturer séparément au restaurant à 100%).
-    </p>
-    ${ps.html}
-    <div style="display:flex;gap:.5rem;margin:.6rem 0;align-items:center">
-      <button type="button" class="btn btn-info btn-sm" id="fcPreviewBtn"><i class="fas fa-eye"></i> Aperçu lignes</button>
-      <div style="margin-left:auto;font-size:.8rem" class="text-muted">Période : <strong id="fcLabel"></strong></div>
+  let picker = null // composant marquesPicker (chargé après période)
+  const m = modal('<i class="fas fa-file-invoice"></i> Facture commissions standard (→ DropEat)', `
+    <div style="background:#eff6ff;border-left:3px solid #1d4ed8;padding:.7rem;border-radius:6px;margin-bottom:1rem;font-size:.85rem">
+      <strong><i class="fas fa-circle-info"></i> Commissions propres uniquement</strong> sur les marques que vous gérez (hors portefeuille propriétaire).<br>
+      <span class="text-muted">Les commissions <strong>MLM (N+1 / N+2)</strong> font l'objet d'une facture séparée — utilisez « Facture MLM » sur la page principale.</span>
     </div>
-    <div id="fcPreview" style="margin:1rem 0;padding:1rem;background:#f9fafb;border-radius:6px;display:none"></div>
-    <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="fcNotes" rows="2"></textarea></div>
+
+    <!-- ÉTAPE 1 : Période -->
+    <div style="margin-bottom:.8rem">
+      <strong style="font-size:.9rem">1. Choisir la période</strong>
+      ${ps.html}
+      <div style="display:flex;gap:.5rem;margin-top:.5rem;align-items:center">
+        <button type="button" class="btn btn-secondary btn-sm" id="fcLoadMarques"><i class="fas fa-sync"></i> Charger mes marques</button>
+        <div style="margin-left:auto;font-size:.8rem" class="text-muted">Période : <strong id="fcLabel"></strong></div>
+      </div>
+    </div>
+
+    <!-- ÉTAPE 2 : Marques + mode -->
+    <div id="fcStep2" style="display:none;margin-bottom:.8rem">
+      <strong style="font-size:.9rem">2. Sélectionner les marques à facturer</strong>
+      <div id="fcMarquesBox"></div>
+      <div class="card" style="background:#fef9c3;margin-top:.6rem;padding:.6rem">
+        <strong style="font-size:.85rem">Mode de facturation :</strong>
+        <div style="display:flex;flex-direction:column;gap:.3rem;margin-top:.3rem;font-size:.85rem">
+          <label style="cursor:pointer"><input type="radio" name="fcMode" value="groupee" checked> <strong>1 facture groupée</strong> — toutes les marques sur une seule facture (recommandé)</label>
+          <label style="cursor:pointer"><input type="radio" name="fcMode" value="split"> <strong>N factures séparées</strong> — 1 facture par marque (numérotation indépendante)</label>
+        </div>
+      </div>
+      <div style="display:flex;gap:.5rem;margin-top:.6rem">
+        <button type="button" class="btn btn-info btn-sm" id="fcPreviewBtn"><i class="fas fa-eye"></i> Aperçu</button>
+      </div>
+    </div>
+
+    <!-- ÉTAPE 3 : Aperçu + création -->
+    <div id="fcStep3" style="display:none">
+      <strong style="font-size:.9rem">3. Aperçu & validation</strong>
+      <div id="fcPreview" style="margin:.5rem 0;padding:1rem;background:#f9fafb;border-radius:6px"></div>
+      <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="fcNotes" rows="2"></textarea></div>
+    </div>
+
     <div class="form-actions">
       <button type="button" class="btn btn-secondary" data-close>Annuler</button>
-      <button type="button" class="btn btn-primary" id="fcCreate"><i class="fas fa-file-invoice"></i> Créer brouillon</button>
+      <button type="button" class="btn btn-primary" id="fcCreate" disabled><i class="fas fa-file-invoice"></i> Créer la/les facture(s)</button>
     </div>
   `)
   m.el.querySelector('[data-close]').onclick = () => m.close()
@@ -7629,37 +7888,193 @@ function factureCreateAgentModal(onSuccess) {
     const p = ps.getPeriode(m.el)
     m.el.querySelector('#fcLabel').textContent = ps.periodeLabel(p)
   }
+  function resetSteps() {
+    m.el.querySelector('#fcStep2').style.display = 'none'
+    m.el.querySelector('#fcStep3').style.display = 'none'
+    m.el.querySelector('#fcCreate').disabled = true
+    picker = null
+  }
+  ps.attach(m.el, () => { updateLabel(); resetSteps() })
+  updateLabel()
+
+  async function loadMarques() {
+    const p = ps.getPeriode(m.el)
+    try {
+      const q = ps.toQueryString(p)
+      const { data } = await api.get('/factures/agent/marques-facturables-self?' + q)
+      const marques = data.marques || []
+      picker = marquesPicker({
+        uid: 'fc', mode: 'agent_dropeat', marques,
+        onChange: () => { /* le total est calculé par le picker lui-même */ }
+      })
+      const box = m.el.querySelector('#fcMarquesBox')
+      box.innerHTML = picker.html
+      picker.attach(box)
+      m.el.querySelector('#fcStep2').style.display = 'block'
+      m.el.querySelector('#fcStep3').style.display = 'none'
+      m.el.querySelector('#fcCreate').disabled = true
+      if (!marques.length) {
+        toast('Aucune marque facturable sur cette période (hors portefeuille).', 'info', 4500)
+      } else {
+        const eligibles = marques.filter(x => x.eligible_dropeat).length
+        toast(`${marques.length} marque(s) trouvée(s), ${eligibles} éligible(s) DropEat`)
+      }
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+  m.el.querySelector('#fcLoadMarques').onclick = loadMarques
+
+  m.el.querySelector('#fcPreviewBtn').onclick = async () => {
+    if (!picker) return toast('Cliquez d\'abord sur « Charger mes marques »', 'error')
+    const box = m.el.querySelector('#fcMarquesBox')
+    const ids = picker.getSelected(box)
+    if (!ids.length) return toast('Cochez au moins une marque', 'error')
+    const p = ps.getPeriode(m.el)
+    const mode = m.el.querySelector('input[name="fcMode"]:checked').value
+    const splitByMarque = mode === 'split'
+    try {
+      const body = {
+        marques_ids: ids,
+        scope: 'standard',
+        split_by_marque: splitByMarque,
+        ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin })
+      }
+      const { data } = await api.post('/factures/agent/preview', body)
+      const previewBox = m.el.querySelector('#fcPreview')
+      if (!data.lignes.length) {
+        previewBox.innerHTML = '<div class="text-muted">Aucune commission à facturer avec ces filtres.</div>'
+        m.el.querySelector('#fcCreate').disabled = true
+      } else if (splitByMarque && data.groupes) {
+        previewBox.innerHTML = `
+          <strong><i class="fas fa-layer-group"></i> Mode séparé — ${data.groupes.length} facture(s) à créer — Total HT : ${fmtEUR(data.total)}</strong>
+          <table class="data-table" style="font-size:.8rem;margin-top:.4rem">
+            <thead><tr><th>Facture</th><th class="text-right">Lignes</th><th class="text-right">HT</th></tr></thead>
+            <tbody>${data.groupes.map(g => `<tr>
+              <td><strong>${escapeHtml(g.libelle)}</strong></td>
+              <td class="text-right">${g.lignes.length}</td>
+              <td class="text-right"><strong>${fmtEUR(g.total_ht)}</strong></td>
+            </tr>`).join('')}</tbody>
+          </table>`
+        m.el.querySelector('#fcCreate').disabled = false
+      } else {
+        previewBox.innerHTML = `
+          <strong>Facture groupée — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
+          <table class="data-table" style="font-size:.8rem;margin-top:.4rem">
+            <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">HT</th></tr></thead>
+            <tbody>${data.lignes.map(l => `<tr>
+              <td>${escapeHtml(l.libelle)}<br><small class="text-muted">${escapeHtml(l.description)}</small></td>
+              <td class="text-right">${fmtNum(l.quantite)}</td>
+              <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
+            </tr>`).join('')}</tbody>
+          </table>`
+        m.el.querySelector('#fcCreate').disabled = false
+      }
+      m.el.querySelector('#fcStep3').style.display = 'block'
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+
+  m.el.querySelector('#fcCreate').onclick = async () => {
+    if (!picker) return toast('Sélectionnez les marques puis cliquez sur « Aperçu »', 'error')
+    const box = m.el.querySelector('#fcMarquesBox')
+    const ids = picker.getSelected(box)
+    if (!ids.length) return toast('Cochez au moins une marque', 'error')
+    const p = ps.getPeriode(m.el)
+    const mode = m.el.querySelector('input[name="fcMode"]:checked').value
+    const splitByMarque = mode === 'split'
+    const notes = m.el.querySelector('#fcNotes').value
+    try {
+      const body = {
+        marques_ids: ids,
+        scope: 'standard',
+        split_by_marque: splitByMarque,
+        notes,
+        ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin })
+      }
+      const { data } = await api.post('/factures/agent/create', body)
+      if (data.mode === 'split_by_marque') {
+        toast(`${data.nb_factures} facture(s) créée(s) — Total HT : ${fmtEUR(data.total_ht)}`)
+        m.close()
+        onSuccess && onSuccess()
+      } else {
+        toast('Facture créée : ' + data.numero)
+        m.close()
+        onSuccess && onSuccess()
+      }
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+}
+
+// ============================================================
+// Modal AGENT → DROPEAT — Facture MLM (commissions N+1 / N+2)
+// scope='mlm' — facture séparée, pas de picker (commissions globales par filleul)
+// Préfixe AGT-MLM-YYYY-MM-NNNN
+// ============================================================
+function factureCreateAgentMLMModal(onSuccess) {
+  const ps = periodeSelector('fm')
+  const m = modal('<i class="fas fa-sitemap" style="color:#9333ea"></i> Facture commissions MLM (N+1 / N+2 → DropEat)', `
+    <div style="background:#f5f3ff;border-left:3px solid #9333ea;padding:.7rem;border-radius:6px;margin-bottom:1rem;font-size:.85rem">
+      <strong><i class="fas fa-circle-info"></i> Commissions MLM uniquement</strong> — sur les ventes de vos filleuls directs (N+1) et de leurs filleuls (N+2).<br>
+      <span class="text-muted">Cette facture est <strong>séparée</strong> de vos commissions propres (numérotation <code>AGT-MLM-YYYY-MM-NNNN</code>) pour traçabilité réglementaire.</span>
+    </div>
+    ${ps.html}
+    <div style="display:flex;gap:.5rem;margin:.6rem 0;align-items:center">
+      <button type="button" class="btn btn-info btn-sm" id="fmPreviewBtn"><i class="fas fa-eye"></i> Aperçu</button>
+      <div style="margin-left:auto;font-size:.8rem" class="text-muted">Période : <strong id="fmLabel"></strong></div>
+    </div>
+    <div id="fmPreview" style="margin:1rem 0;padding:1rem;background:#f9fafb;border-radius:6px;display:none"></div>
+    <div class="form-group"><label>Notes internes (optionnel)</label><textarea id="fmNotes" rows="2"></textarea></div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+      <button type="button" class="btn btn-primary" id="fmCreate"><i class="fas fa-file-invoice"></i> Créer la facture MLM</button>
+    </div>
+  `)
+  m.el.querySelector('[data-close]').onclick = () => m.close()
+
+  function updateLabel() {
+    const p = ps.getPeriode(m.el)
+    m.el.querySelector('#fmLabel').textContent = ps.periodeLabel(p)
+  }
   ps.attach(m.el, updateLabel)
   updateLabel()
 
-  m.el.querySelector('#fcPreviewBtn').onclick = async () => {
+  m.el.querySelector('#fmPreviewBtn').onclick = async () => {
     const p = ps.getPeriode(m.el)
     try {
-      const body = p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }
+      const body = {
+        scope: 'mlm',
+        ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin })
+      }
       const { data } = await api.post('/factures/agent/preview', body)
-      const box = m.el.querySelector('#fcPreview')
+      const box = m.el.querySelector('#fmPreview')
       box.style.display = 'block'
-      box.innerHTML = data.lignes.length ? `
-        <strong>Aperçu — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
+      if (!data.lignes.length) {
+        box.innerHTML = '<div class="text-muted">Aucune commission MLM (N+1/N+2) à facturer pour cette période.</div>'
+        return
+      }
+      box.innerHTML = `
+        <strong><i class="fas fa-sitemap" style="color:#9333ea"></i> Aperçu MLM — ${data.lignes.length} ligne(s) — Total HT : ${fmtEUR(data.total)}</strong>
         <div class="text-muted" style="font-size:.78rem;margin:.3rem 0 .5rem 0">Période : ${escapeHtml(data.periode.label || ps.periodeLabel(p))}</div>
-        <table class="data-table" style="font-size:.8rem;margin-top:.5rem">
-          <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">Montant HT</th></tr></thead>
+        <table class="data-table" style="font-size:.8rem">
+          <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">HT</th></tr></thead>
           <tbody>${data.lignes.map(l => `<tr>
             <td>${escapeHtml(l.libelle)}<br><small class="text-muted">${escapeHtml(l.description)}</small></td>
             <td class="text-right">${fmtNum(l.quantite)}</td>
             <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
           </tr>`).join('')}</tbody>
-        </table>
-      ` : '<div class="text-muted">Aucune commission à facturer pour cette période.</div>'
+        </table>`
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
-  m.el.querySelector('#fcCreate').onclick = async () => {
+
+  m.el.querySelector('#fmCreate').onclick = async () => {
     const p = ps.getPeriode(m.el)
-    const notes = m.el.querySelector('#fcNotes').value
+    const notes = m.el.querySelector('#fmNotes').value
     try {
-      const body = { notes, ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }) }
+      const body = {
+        scope: 'mlm',
+        notes,
+        ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin })
+      }
       const { data } = await api.post('/factures/agent/create', body)
-      toast('Facture créée : ' + data.numero)
+      toast('Facture MLM créée : ' + data.numero)
       m.close()
       onSuccess && onSuccess()
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
@@ -7721,23 +8136,200 @@ PAGES['admin-factures'] = async (c) => {
   c.querySelectorAll('[data-view]').forEach(b => b.onclick = () => factureViewerModal(b.dataset.view))
 }
 
-// === Generate invoice DropEat → Restaurant ===
+// ============================================================
+// COMPOSANT PARTAGÉ : Picker de marques avec montants
+// ============================================================
+// Affiche un tableau interactif de marques avec cases à cocher.
+// Les marques non éligibles (portefeuille) sont grisées mais cliquables
+// pour consultation (pas pour sélection finale).
+//
+// Options :
+//   - mode : 'dropeat_resto' (vue DropEat→Resto) | 'agent_dropeat' (vue agent→DropEat)
+//            | 'agent_resto' (vue agent→Resto portefeuille)
+//   - marques : array depuis l'API
+//   - getRowMontant : fn(marque) => montant à afficher (différent selon mode)
+//   - onChange(selectedIds[], totalEstime) : callback
+//
+// Méthodes exposées :
+//   - render(container) : injecte le HTML
+//   - getSelected() : retourne marques_ids[] cochées
+//   - getTotal() : retourne le total HT des marques cochées
+// ============================================================
+function marquesPicker(opts) {
+  const mode = opts.mode || 'dropeat_resto'
+  const marques = opts.marques || []
+  const onChange = opts.onChange || (() => {})
+
+  // Détecte le champ montant selon le mode
+  function getMontant(m) {
+    if (mode === 'agent_dropeat') return m.commission_agent_estimee || 0
+    if (mode === 'agent_resto') return m.facturation_estimee || 0
+    return m.facturation_estimee || 0 // dropeat_resto
+  }
+  function getMontantLabel() {
+    if (mode === 'agent_dropeat') return 'Commission HT'
+    if (mode === 'agent_resto') return 'Facturable 100% HT'
+    return 'Facturation HT'
+  }
+  function isEligible(m) {
+    if (mode === 'agent_resto') return m.eligible !== false // portefeuille = éligible ici
+    return m.eligible_dropeat === true
+  }
+  function badgeMarque(m) {
+    if (mode === 'agent_resto') {
+      // En mode portefeuille, on n'affiche pas de badge négatif (toutes les marques sont portefeuille)
+      if (m.is_portefeuille && m.resto_is_portefeuille) return '<span class="badge" style="background:#fde68a;color:#92400e;font-size:.65rem">Resto + Marque P</span>'
+      if (m.is_portefeuille) return '<span class="badge" style="background:#fde68a;color:#92400e;font-size:.65rem">Marque P</span>'
+      if (m.resto_is_portefeuille) return '<span class="badge" style="background:#fde68a;color:#92400e;font-size:.65rem">Resto P</span>'
+      return ''
+    }
+    // Modes DropEat
+    if (m.is_portefeuille && m.resto_is_portefeuille) return '<span class="badge" style="background:#fde68a;color:#92400e;font-size:.65rem">Resto + Marque P (100% agent)</span>'
+    if (m.is_portefeuille) return '<span class="badge" style="background:#fde68a;color:#92400e;font-size:.65rem">Portefeuille 100% agent</span>'
+    if (m.resto_is_portefeuille) return '<span class="badge" style="background:#fde68a;color:#92400e;font-size:.65rem">Resto Portefeuille</span>'
+    return ''
+  }
+
+  const html = `
+    <div class="card" style="background:#f9fafb;margin-top:.5rem">
+      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
+        <span><i class="fas fa-tags"></i> Marques disponibles — ${marques.length}</span>
+        <div style="display:flex;gap:.4rem;font-size:.8rem">
+          <button type="button" class="btn btn-sm btn-secondary" data-mp-all-eligible><i class="fas fa-check-double"></i> Tout cocher (éligibles)</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-mp-none><i class="fas fa-times"></i> Tout décocher</button>
+        </div>
+      </div>
+      ${marques.length === 0 ? '<div class="text-muted" style="padding:1rem;text-align:center">Aucune marque pour ce restaurant sur cette période.</div>' : `
+      <div class="table-wrap">
+        <table class="data-table" style="font-size:.85rem">
+          <thead><tr>
+            <th style="width:32px"><input type="checkbox" data-mp-master title="Tout cocher / décocher (éligibles uniquement)"/></th>
+            <th>Marque</th>
+            <th>Plateforme</th>
+            <th>Statut</th>
+            <th class="text-right">Cmds</th>
+            <th class="text-right">CA brut</th>
+            <th class="text-right">${getMontantLabel()}</th>
+          </tr></thead>
+          <tbody>
+            ${marques.map(m => {
+              const elig = isEligible(m)
+              const montant = getMontant(m)
+              const badge = badgeMarque(m)
+              return `<tr class="mp-row" data-mp-mid="${m.marque_id}" data-mp-elig="${elig ? 1 : 0}" data-mp-montant="${montant}" style="${!elig ? 'background:#f3f4f6;color:#6b7280' : ''}">
+                <td>${elig
+                  ? `<input type="checkbox" class="mp-cb" value="${m.marque_id}" data-montant="${montant}"/>`
+                  : `<span title="Non éligible — vérification uniquement"><i class="fas fa-lock" style="color:#9ca3af"></i></span>`
+                }</td>
+                <td><strong>${escapeHtml(m.marque_nom)}</strong>${m.restaurant_nom ? `<br><small class="text-muted">${escapeHtml(m.restaurant_nom)}</small>` : ''}</td>
+                <td><span style="font-size:.75rem;text-transform:capitalize">${escapeHtml((m.plateforme || '').replace('_', ' '))}</span></td>
+                <td>${badge || '<span class="badge badge-primary" style="font-size:.65rem">Éligible</span>'}</td>
+                <td class="text-right">${m.nb_commandes || 0}</td>
+                <td class="text-right">${fmtEUR(m.ca_brut || 0)}</td>
+                <td class="text-right"><strong>${fmtEUR(montant)}</strong></td>
+              </tr>`
+            }).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="background:#eff6ff;font-weight:bold">
+              <td colspan="6" class="text-right">Total marques cochées :</td>
+              <td class="text-right"><strong id="mp-total-${opts.uid || 'def'}" style="color:#1d4ed8">${fmtEUR(0)}</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      `}
+    </div>
+  `
+
+  function attach(root) {
+    const cbs = () => Array.from(root.querySelectorAll('.mp-cb'))
+    const totalEl = root.querySelector(`#mp-total-${opts.uid || 'def'}`)
+
+    function recompute() {
+      const ids = cbs().filter(cb => cb.checked).map(cb => parseInt(cb.value))
+      let total = 0
+      cbs().forEach(cb => {
+        if (cb.checked) total += parseFloat(cb.dataset.montant || 0)
+      })
+      if (totalEl) totalEl.textContent = fmtEUR(total)
+      // Master checkbox state
+      const master = root.querySelector('[data-mp-master]')
+      if (master) {
+        const checked = cbs().filter(cb => cb.checked).length
+        const totalCb = cbs().length
+        master.checked = checked === totalCb && totalCb > 0
+        master.indeterminate = checked > 0 && checked < totalCb
+      }
+      onChange(ids, total)
+    }
+
+    cbs().forEach(cb => cb.onchange = recompute)
+    const master = root.querySelector('[data-mp-master]')
+    if (master) master.onchange = () => {
+      cbs().forEach(cb => cb.checked = master.checked)
+      recompute()
+    }
+    const btnAll = root.querySelector('[data-mp-all-eligible]')
+    if (btnAll) btnAll.onclick = () => { cbs().forEach(cb => cb.checked = true); recompute() }
+    const btnNone = root.querySelector('[data-mp-none]')
+    if (btnNone) btnNone.onclick = () => { cbs().forEach(cb => cb.checked = false); recompute() }
+
+    // Clic sur une ligne grisée (non éligible) → toast info
+    root.querySelectorAll('.mp-row[data-mp-elig="0"]').forEach(row => {
+      row.onclick = (ev) => {
+        if (ev.target.tagName === 'INPUT') return
+        const isPf = row.querySelector('td:nth-child(4)')?.textContent || ''
+        toast(`Marque en portefeuille (${isPf.trim()}) — non facturable par DropEat. Facturée à 100% par l'agent directement au restaurant.`, 'info', 4500)
+      }
+      row.style.cursor = 'pointer'
+    })
+
+    recompute()
+  }
+
+  function getSelected(root) {
+    return Array.from(root.querySelectorAll('.mp-cb:checked')).map(cb => parseInt(cb.value))
+  }
+  function getTotal(root) {
+    return Array.from(root.querySelectorAll('.mp-cb:checked'))
+      .reduce((s, cb) => s + parseFloat(cb.dataset.montant || 0), 0)
+  }
+
+  return { html, attach, getSelected, getTotal }
+}
+
+// ============================================================
+// PAGE ADMIN : Facturer un restaurant — Assistant 3 étapes
+// ============================================================
 PAGES['admin-factures-resto'] = async (c) => {
   const { data } = await api.get('/admin/restaurants').catch(() => ({ data: { restaurants: [] } }))
   const restos = data.restaurants || []
   const ps = periodeSelector('fdr')
+  // Pré-sélection éventuelle depuis le bouton « Facturer » de la liste restos
+  let preselectRestoId = null
+  try {
+    const p = sessionStorage.getItem('billing_preselect_resto')
+    if (p) { preselectRestoId = parseInt(p); sessionStorage.removeItem('billing_preselect_resto') }
+  } catch {}
+
   c.innerHTML = `
     <div class="page-header">
       <div><h1><i class="fas fa-file-export"></i> Facturer un restaurant</h1>
-        <div class="subtitle">Génération automatique de la facture DropEat → Restaurant selon ses marques actives (hors portefeuille propriétaire)</div></div>
+        <div class="subtitle">Assistant guidé : Restaurant → Marques à facturer → Aperçu & émission</div></div>
     </div>
-    <div class="card">
-      <div class="card-title"><i class="fas fa-list"></i> Sélectionner restaurant + période</div>
+
+    <!-- ÉTAPE 1 : Restaurant + Période -->
+    <div class="card" id="fdrStep1">
+      <div class="card-title" style="display:flex;align-items:center;gap:.5rem">
+        <span style="background:#1d4ed8;color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem">1</span>
+        <span><i class="fas fa-store"></i> Sélection restaurant + période</span>
+      </div>
       <div class="form-grid">
         <div class="form-group" style="grid-column:1/-1"><label>Restaurant <span class="req">*</span></label>
           <select id="fdrResto">
-            <option value="">— Choisir —</option>
-            ${restos.map(r => `<option value="${r.id}">${escapeHtml(r.nom)} — ${escapeHtml(r.ville || '')}</option>`).join('')}
+            <option value="">— Choisir un restaurant —</option>
+            ${restos.map(r => `<option value="${r.id}" ${preselectRestoId === r.id ? 'selected' : ''}>${escapeHtml(r.nom)} — ${escapeHtml(r.ville || '')}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -7746,10 +8338,63 @@ PAGES['admin-factures-resto'] = async (c) => {
         <div style="margin-left:auto;font-size:.85rem" class="text-muted">Période : <strong id="fdrLabel"></strong></div>
       </div>
       <div class="form-actions">
-        <button class="btn btn-primary" id="fdrCreate"><i class="fas fa-file-invoice"></i> Générer la facture</button>
+        <button class="btn btn-primary" id="fdrLoadMarques"><i class="fas fa-arrow-right"></i> Étape 2 : Charger les marques</button>
+      </div>
+    </div>
+
+    <!-- ÉTAPE 2 : Sélection marques -->
+    <div class="card" id="fdrStep2" style="display:none">
+      <div class="card-title" style="display:flex;align-items:center;gap:.5rem">
+        <span style="background:#1d4ed8;color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem">2</span>
+        <span><i class="fas fa-tags"></i> Sélection des marques à facturer</span>
+      </div>
+      <div id="fdrRestoInfo" class="text-muted" style="font-size:.85rem;margin-bottom:.5rem"></div>
+      <div style="background:#eff6ff;border-left:3px solid #1d4ed8;padding:.6rem .8rem;border-radius:6px;margin-bottom:.7rem;font-size:.82rem">
+        <i class="fas fa-circle-info"></i> Cochez les marques à inclure dans la facture. Les marques <strong>en portefeuille propriétaire</strong> (grisées 🔒) ne sont <strong>pas facturables par DropEat</strong> — elles sont facturées à 100% par l'agent directement au restaurant. Cliquez dessus pour vérification.
+      </div>
+      <div id="fdrMarquesPicker"></div>
+
+      <div class="form-grid" style="margin-top:1rem">
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Mode de facturation</label>
+          <div style="display:flex;flex-direction:column;gap:.4rem;font-size:.88rem">
+            <label style="display:flex;align-items:flex-start;gap:.4rem;cursor:pointer">
+              <input type="radio" name="fdrMode" value="groupee" checked style="margin-top:.2rem"/>
+              <div><strong>1 seule facture groupée</strong> <span class="text-muted">— toutes les marques cochées sur une même facture (1 ligne par marque)</span></div>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:.4rem;cursor:pointer">
+              <input type="radio" name="fdrMode" value="split" style="margin-top:.2rem"/>
+              <div><strong>1 facture par marque</strong> <span class="text-muted">— autant de factures que de marques cochées (meilleure isolation comptable)</span></div>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="form-actions" style="justify-content:space-between">
+        <button class="btn btn-secondary" id="fdrBackTo1"><i class="fas fa-arrow-left"></i> Retour</button>
+        <button class="btn btn-primary" id="fdrGoStep3"><i class="fas fa-eye"></i> Étape 3 : Aperçu</button>
+      </div>
+    </div>
+
+    <!-- ÉTAPE 3 : Aperçu + Création -->
+    <div class="card" id="fdrStep3" style="display:none">
+      <div class="card-title" style="display:flex;align-items:center;gap:.5rem">
+        <span style="background:#059669;color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem">3</span>
+        <span><i class="fas fa-check-circle"></i> Aperçu & émission</span>
+      </div>
+      <div id="fdrPreview"></div>
+      <div class="form-grid" style="margin-top:.6rem">
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Notes internes (optionnel — non visibles sur la facture)</label>
+          <textarea id="fdrNotes" rows="2" placeholder="Ex: facture mensuelle régulière"></textarea>
+        </div>
+      </div>
+      <div class="form-actions" style="justify-content:space-between">
+        <button class="btn btn-secondary" id="fdrBackTo2"><i class="fas fa-arrow-left"></i> Retour</button>
+        <button class="btn btn-primary" id="fdrCreate"><i class="fas fa-file-invoice"></i> <span id="fdrCreateLabel">Générer la facture</span></button>
       </div>
     </div>
   `
+
   function updateLabel() {
     const p = ps.getPeriode(c)
     c.querySelector('#fdrLabel').textContent = ps.periodeLabel(p)
@@ -7757,15 +8402,154 @@ PAGES['admin-factures-resto'] = async (c) => {
   ps.attach(c, updateLabel)
   updateLabel()
 
-  c.querySelector('#fdrCreate').onclick = async () => {
+  let currentPicker = null
+  let currentMarquesData = null
+  let currentResto = null
+
+  // ===== Étape 1 → 2 =====
+  c.querySelector('#fdrLoadMarques').onclick = async () => {
     const restaurant_id = parseInt(c.querySelector('#fdrResto').value)
     if (!restaurant_id) return toast('Sélectionnez un restaurant', 'error')
     const p = ps.getPeriode(c)
     try {
-      const body = { restaurant_id, ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin }) }
+      const qs = ps.toQueryString(p) + '&restaurant_id=' + restaurant_id
+      const { data } = await api.get('/factures/resto/marques-facturables?' + qs)
+      currentMarquesData = data
+      currentResto = data.restaurant
+
+      const eligibles = data.marques.filter(m => m.eligible_dropeat).length
+      c.querySelector('#fdrRestoInfo').innerHTML = `
+        <strong>${escapeHtml(data.restaurant.nom)}</strong>${data.restaurant.ville ? ' — ' + escapeHtml(data.restaurant.ville) : ''}
+        ${data.restaurant.agent_prenom ? ` · Agent : ${escapeHtml(data.restaurant.agent_prenom + ' ' + data.restaurant.agent_nom)}` : ''}
+        · Période : <strong>${escapeHtml(ps.periodeLabel(p))}</strong>
+        · <strong>${data.marques.length}</strong> marque(s) totale, <strong style="color:#1d4ed8">${eligibles}</strong> éligible(s) facturation DropEat
+      `
+
+      const picker = marquesPicker({
+        uid: 'fdr',
+        mode: 'dropeat_resto',
+        marques: data.marques,
+        onChange: (ids, total) => {
+          c.querySelector('#fdrGoStep3').disabled = ids.length === 0
+        }
+      })
+      const pickerEl = c.querySelector('#fdrMarquesPicker')
+      pickerEl.innerHTML = picker.html
+      picker.attach(pickerEl)
+      currentPicker = picker
+
+      c.querySelector('#fdrStep1').style.display = 'none'
+      c.querySelector('#fdrStep2').style.display = ''
+      c.querySelector('#fdrStep3').style.display = 'none'
+      c.querySelector('#fdrGoStep3').disabled = true
+
+      if (eligibles === 0) {
+        toast('Aucune marque éligible à facturation DropEat sur cette période', 'error', 5000)
+      }
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+
+  // ===== Retour Étape 2 → 1 =====
+  c.querySelector('#fdrBackTo1').onclick = () => {
+    c.querySelector('#fdrStep1').style.display = ''
+    c.querySelector('#fdrStep2').style.display = 'none'
+    c.querySelector('#fdrStep3').style.display = 'none'
+  }
+
+  // ===== Étape 2 → 3 (Aperçu) =====
+  c.querySelector('#fdrGoStep3').onclick = async () => {
+    const pickerEl = c.querySelector('#fdrMarquesPicker')
+    const ids = currentPicker.getSelected(pickerEl)
+    if (!ids.length) return toast('Cochez au moins une marque', 'error')
+    const split = c.querySelector('input[name="fdrMode"]:checked').value === 'split'
+    const p = ps.getPeriode(c)
+
+    try {
+      const body = {
+        restaurant_id: currentResto.id,
+        marques_ids: ids,
+        split_by_marque: split,
+        ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin })
+      }
+      const { data } = await api.post('/factures/resto/preview', body)
+      const box = c.querySelector('#fdrPreview')
+      if (split && data.groupes) {
+        box.innerHTML = `
+          <div style="background:#ecfdf5;border-left:3px solid #059669;padding:.6rem .8rem;border-radius:6px;margin-bottom:.6rem;font-size:.85rem">
+            <i class="fas fa-info-circle"></i> Mode <strong>1 facture par marque</strong> : <strong>${data.groupes.length} facture(s)</strong> seront créées · Total cumulé HT : <strong style="color:#059669">${fmtEUR(data.total)}</strong>
+          </div>
+          ${data.groupes.map(g => `
+            <div class="card" style="background:#fff;margin-bottom:.5rem">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
+                <strong><i class="fas fa-file-invoice"></i> ${escapeHtml(g.libelle)}</strong>
+                <span style="color:#059669;font-weight:bold">Total HT : ${fmtEUR(g.total_ht)}</span>
+              </div>
+              <table class="data-table" style="font-size:.78rem">
+                <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">HT</th></tr></thead>
+                <tbody>${g.lignes.map(l => `<tr>
+                  <td>${escapeHtml(l.libelle)}<br><small class="text-muted">${escapeHtml(l.description)}</small></td>
+                  <td class="text-right">${fmtNum(l.quantite)}</td>
+                  <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
+                </tr>`).join('')}</tbody>
+              </table>
+            </div>
+          `).join('')}
+        `
+        c.querySelector('#fdrCreateLabel').textContent = `Générer ${data.groupes.length} facture(s)`
+      } else {
+        box.innerHTML = data.lignes.length ? `
+          <div style="background:#eff6ff;border-left:3px solid #1d4ed8;padding:.6rem .8rem;border-radius:6px;margin-bottom:.6rem;font-size:.85rem">
+            <i class="fas fa-info-circle"></i> Mode <strong>facture groupée</strong> · ${data.nb_lignes} ligne(s) · Total HT : <strong style="color:#1d4ed8">${fmtEUR(data.total)}</strong>
+          </div>
+          <table class="data-table" style="font-size:.82rem">
+            <thead><tr><th>Libellé</th><th class="text-right">Cmds</th><th class="text-right">P.U.</th><th class="text-right">HT</th></tr></thead>
+            <tbody>${data.lignes.map(l => `<tr>
+              <td>${escapeHtml(l.libelle)}<br><small class="text-muted">${escapeHtml(l.description)}</small></td>
+              <td class="text-right">${fmtNum(l.quantite)}</td>
+              <td class="text-right">${fmtEUR(l.prix_unitaire)}</td>
+              <td class="text-right"><strong>${fmtEUR(l.montant_ht)}</strong></td>
+            </tr>`).join('')}</tbody>
+          </table>
+        ` : '<div class="text-muted">Aucune ligne à facturer.</div>'
+        c.querySelector('#fdrCreateLabel').textContent = 'Générer la facture'
+      }
+
+      c.querySelector('#fdrStep1').style.display = 'none'
+      c.querySelector('#fdrStep2').style.display = 'none'
+      c.querySelector('#fdrStep3').style.display = ''
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+
+  // ===== Retour Étape 3 → 2 =====
+  c.querySelector('#fdrBackTo2').onclick = () => {
+    c.querySelector('#fdrStep1').style.display = 'none'
+    c.querySelector('#fdrStep2').style.display = ''
+    c.querySelector('#fdrStep3').style.display = 'none'
+  }
+
+  // ===== Création finale =====
+  c.querySelector('#fdrCreate').onclick = async () => {
+    const pickerEl = c.querySelector('#fdrMarquesPicker')
+    const ids = currentPicker.getSelected(pickerEl)
+    const split = c.querySelector('input[name="fdrMode"]:checked').value === 'split'
+    const p = ps.getPeriode(c)
+    const notes = c.querySelector('#fdrNotes').value
+    try {
+      const body = {
+        restaurant_id: currentResto.id,
+        marques_ids: ids,
+        split_by_marque: split,
+        notes,
+        ...(p.type === 'mois' ? { annee: p.annee, mois: p.mois } : { date_debut: p.date_debut, date_fin: p.date_fin })
+      }
       const { data } = await api.post('/factures/resto/create', body)
-      toast('Facture générée : ' + data.numero)
-      factureViewerModal(data.facture_id)
+      if (data.mode === 'split_by_marque') {
+        toast(`✅ ${data.nb_factures} facture(s) générée(s) — Total ${fmtEUR(data.total_ttc)} TTC`, 'success', 5000)
+        navigate('admin-factures')
+      } else {
+        toast('Facture générée : ' + data.numero)
+        factureViewerModal(data.facture_id)
+      }
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
 }
