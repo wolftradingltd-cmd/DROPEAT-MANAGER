@@ -480,6 +480,199 @@ app.get('/:id/details', async (c) => {
   })
 })
 
+// ============================================================
+// GET /api/imports/:id/download — Reconstruire et télécharger le CSV original
+// depuis raw_data des commandes (admin + agent de la branche)
+// ============================================================
+app.get('/:id/download', async (c) => {
+  const user = c.get('user')
+  const id = c.req.param('id')
+
+  const imp = await c.env.DB.prepare(`
+    SELECT i.*, r.agent_id, m.nom as marque_nom, r.nom as restaurant_nom
+    FROM imports_csv i
+    JOIN marques_virtuelles m ON i.marque_id = m.id
+    JOIN restaurants r ON m.restaurant_id = r.id
+    WHERE i.id = ?
+  `).bind(id).first() as any
+  if (!imp) return c.json({ error: 'Import introuvable' }, 404)
+
+  if (user.role !== 'superadmin') {
+    const branchIds = await getBranchAgentIds(c.env.DB, user.id)
+    if (!branchIds.includes(imp.agent_id)) {
+      return c.json({ error: 'Accès refusé' }, 403)
+    }
+  }
+
+  const { results: cmds } = await c.env.DB.prepare(`
+    SELECT raw_data FROM commandes WHERE import_id = ? ORDER BY date_commande
+  `).bind(id).all() as any
+
+  if (!cmds.length) {
+    return c.json({ error: 'Aucune commande pour cet import' }, 404)
+  }
+
+  // Reconstruction du CSV : récupérer toutes les clés rencontrées
+  const headersSet = new Set<string>()
+  const rows: Record<string, string>[] = []
+  for (const row of cmds as any[]) {
+    try {
+      const obj = JSON.parse(row.raw_data || '{}')
+      rows.push(obj)
+      Object.keys(obj).forEach(k => headersSet.add(k))
+    } catch {}
+  }
+  const headers = Array.from(headersSet)
+
+  function esc(v: any): string {
+    if (v === null || v === undefined) return ''
+    const s = String(v)
+    if (s.includes('"') || s.includes(';') || s.includes('\n') || s.includes(',')) {
+      return '"' + s.replace(/"/g, '""') + '"'
+    }
+    return s
+  }
+  const lines = [headers.map(esc).join(';')]
+  for (const row of rows) {
+    lines.push(headers.map(h => esc(row[h])).join(';'))
+  }
+  const csv = '\uFEFF' + lines.join('\n')
+  const filename = (imp.nom_fichier || `import-${id}.csv`).replace(/[^a-zA-Z0-9._-]/g, '_')
+
+  return new Response(csv, {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`
+    }
+  })
+})
+
+// ============================================================
+// POST /api/imports/:id/recalculer — Recalculer les commissions de cet import
+// (refait tourner le moteur d'auto-commissions sur la/les périodes impactées)
+// ============================================================
+app.post('/:id/recalculer', async (c) => {
+  const user = c.get('user')
+  const id = c.req.param('id')
+
+  const imp = await c.env.DB.prepare(`
+    SELECT i.*, r.agent_id FROM imports_csv i
+    JOIN marques_virtuelles m ON i.marque_id = m.id
+    JOIN restaurants r ON m.restaurant_id = r.id
+    WHERE i.id = ?
+  `).bind(id).first() as any
+  if (!imp) return c.json({ error: 'Import introuvable' }, 404)
+
+  if (user.role !== 'superadmin') {
+    const branchIds = await getBranchAgentIds(c.env.DB, user.id)
+    if (!branchIds.includes(imp.agent_id)) {
+      return c.json({ error: 'Accès refusé' }, 403)
+    }
+  }
+
+  const { recalculerPeriodesImpactees } = await import('../lib/auto-commissions')
+  const calculs = await recalculerPeriodesImpactees(c.env.DB, parseInt(id))
+
+  return c.json({ success: true, periodes_recalculees: calculs.length, calculs })
+})
+
+// ============================================================
+// PUT /api/imports/commandes/:cmd_id — Ajustement manuel d'une commande
+// Permet à l'admin de corriger : montant_brut, frais_uber, montant_net,
+// montant_facture_resto, commission_agent_montant, commission_portefeuille_montant,
+// commission_n1_montant, commission_n2_montant, statut, notes_ajustement
+// ============================================================
+app.put('/commandes/:cmd_id', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') {
+    return c.json({ error: 'Réservé superadmin' }, 403)
+  }
+  const cmdId = c.req.param('cmd_id')
+  const body = await c.req.json()
+
+  const FIELDS = [
+    'montant_brut', 'frais_uber', 'montant_net', 'montant_facture_resto',
+    'commission_agent_montant', 'commission_portefeuille_montant',
+    'commission_n1_montant', 'commission_n2_montant', 'statut'
+  ]
+  const updates: string[] = []
+  const params: any[] = []
+  for (const f of FIELDS) {
+    if (body[f] !== undefined) {
+      updates.push(`${f} = ?`)
+      params.push(body[f])
+    }
+  }
+  if (body.notes_ajustement !== undefined) {
+    updates.push(`notes_ajustement = ?`)
+    params.push(body.notes_ajustement)
+  }
+  if (!updates.length) {
+    return c.json({ error: 'Aucun champ à modifier' }, 400)
+  }
+  // Marque l'ajustement
+  updates.push(`ajuste_par_id = ?`)
+  params.push(user.id)
+  updates.push(`ajuste_at = CURRENT_TIMESTAMP`)
+  params.push(cmdId)
+
+  // S'assurer que les colonnes d'audit existent (idempotent)
+  try {
+    await c.env.DB.prepare(`ALTER TABLE commandes ADD COLUMN notes_ajustement TEXT`).run()
+  } catch {}
+  try {
+    await c.env.DB.prepare(`ALTER TABLE commandes ADD COLUMN ajuste_par_id INTEGER`).run()
+  } catch {}
+  try {
+    await c.env.DB.prepare(`ALTER TABLE commandes ADD COLUMN ajuste_at TEXT`).run()
+  } catch {}
+
+  await c.env.DB.prepare(`
+    UPDATE commandes SET ${updates.join(', ')} WHERE id = ?
+  `).bind(...params).run()
+
+  return c.json({ success: true })
+})
+
+// ============================================================
+// POST /api/imports/:id/facturer — Génère une facture DropEat → Restaurant
+// pour la période de cet import (raccourci pratique pour l'admin)
+// ============================================================
+app.post('/:id/facturer', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') {
+    return c.json({ error: 'Réservé superadmin' }, 403)
+  }
+  const id = c.req.param('id')
+
+  const imp = await c.env.DB.prepare(`
+    SELECT i.*, r.id as restaurant_id, r.nom as restaurant_nom,
+           r.is_portefeuille_proprietaire as resto_pf,
+           m.is_portefeuille_proprietaire as marque_pf
+    FROM imports_csv i
+    JOIN marques_virtuelles m ON i.marque_id = m.id
+    JOIN restaurants r ON m.restaurant_id = r.id
+    WHERE i.id = ?
+  `).bind(id).first() as any
+  if (!imp) return c.json({ error: 'Import introuvable' }, 404)
+
+  if (imp.resto_pf || imp.marque_pf) {
+    return c.json({ error: 'Restaurant/marque en PORTEFEUILLE 100% — DropEat ne facture pas (l\'agent facture directement)' }, 400)
+  }
+  if (!imp.periode_debut || !imp.periode_fin) {
+    return c.json({ error: 'Période de l\'import inconnue — impossible de générer une facture' }, 400)
+  }
+
+  // Retourne directement les paramètres pour appeler /api/factures/resto/create
+  return c.json({
+    success: true,
+    restaurant_id: imp.restaurant_id,
+    date_debut: imp.periode_debut,
+    date_fin: imp.periode_fin,
+    info: 'Utilisez POST /api/factures/resto/create avec ces paramètres pour générer la facture'
+  })
+})
+
 // DELETE /api/imports/:id
 app.delete('/:id', async (c) => {
   const user = c.get('user')

@@ -2702,6 +2702,9 @@ async function loadImportsPage(c, baseEndpoint) {
                 <td>${i.agent_prenom ? escapeHtml(i.agent_prenom + ' ' + i.agent_nom) : '-'}</td>
                 <td class="text-right" style="white-space:nowrap">
                   <button class="btn btn-sm btn-secondary" data-details="${i.id}" title="Détail commissions"><i class="fas fa-eye"></i></button>
+                  <button class="btn btn-sm btn-secondary" data-download="${i.id}" title="Télécharger CSV"><i class="fas fa-download"></i></button>
+                  ${isAdmin ? `<button class="btn btn-sm btn-secondary" data-recalc="${i.id}" title="Recalculer commissions"><i class="fas fa-calculator"></i></button>` : ''}
+                  ${isAdmin && !pf ? `<button class="btn btn-sm btn-primary" data-fact="${i.id}" data-resto="${i.restaurant_nom}" title="Créer facture"><i class="fas fa-file-invoice"></i></button>` : ''}
                   <button class="btn btn-sm btn-danger" data-del="${i.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
                 </td>
               </tr>`}).join('')}</tbody>
@@ -2938,13 +2941,67 @@ async function loadImportsPage(c, baseEndpoint) {
   c.querySelectorAll('[data-details]').forEach(b => b.onclick = async () => {
     try {
       const { data } = await api.get(baseEndpoint + '/' + b.dataset.details + '/details')
-      showImportDetailsModal(data)
+      showImportDetailsModal(data, isAdmin, baseEndpoint)
     } catch (e) { toast(e.response?.data?.error || 'Erreur chargement détails', 'error') }
+  })
+
+  // Download CSV original (reconstitué depuis raw_data)
+  c.querySelectorAll('[data-download]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.download
+    try {
+      const resp = await fetch(baseEndpoint + '/' + id + '/download', { credentials: 'include' })
+      if (!resp.ok) { toast('Erreur téléchargement', 'error'); return }
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `import-${id}.csv`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+      toast('CSV téléchargé')
+    } catch (e) { toast('Erreur', 'error') }
+  })
+
+  // Recalculer commissions (admin)
+  c.querySelectorAll('[data-recalc]').forEach(b => b.onclick = () => confirmDialog(
+    'Recalculer les commissions de cet import ?',
+    async () => {
+      try {
+        const { data } = await api.post(baseEndpoint + '/' + b.dataset.recalc + '/recalculer')
+        toast(`Commissions recalculées (${data.periodes_recalculees} période(s))`)
+        navigate(isAdmin ? 'imports' : 'a-imports')
+      } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+    }
+  ))
+
+  // Créer facture DropEat → Restaurant depuis l'import (admin uniquement)
+  c.querySelectorAll('[data-fact]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.fact, restoNom = b.dataset.resto
+    try {
+      const { data } = await api.post(baseEndpoint + '/' + id + '/facturer')
+      if (!data.success) { toast(data.error || 'Impossible', 'error'); return }
+      confirmDialog(
+        `Émettre une facture DropEat → ${restoNom}\nPériode : ${data.date_debut} → ${data.date_fin} ?`,
+        async () => {
+          try {
+            const fres = await api.post('/factures/resto/create', {
+              restaurant_id: data.restaurant_id,
+              date_debut: data.date_debut,
+              date_fin: data.date_fin
+            })
+            toast(`Facture ${fres.data.numero} créée — ${fmtEUR(fres.data.montant_ttc)}`)
+            setTimeout(() => navigate('factures'), 800)
+          } catch (e) { toast(e.response?.data?.error || 'Erreur création facture', 'error') }
+        }
+      )
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   })
 }
 
 // === Modal détail import : breakdown par marque + par agent ===
-function showImportDetailsModal(data) {
+function showImportDetailsModal(data, isAdmin, baseEndpoint) {
+  isAdmin = isAdmin !== false  // défaut admin si non précisé
+  baseEndpoint = baseEndpoint || '/admin/imports'
   const imp = data.import || {}
   const t = data.totaux || {}
   const pf = imp.marque_pf || imp.resto_pf
@@ -3039,8 +3096,11 @@ function showImportDetailsModal(data) {
 
     ${(data.commandes || []).length ? `
     <div class="card">
-      <div class="card-title" style="font-size:.95rem"><i class="fas fa-list"></i> Échantillon commandes (${data.commandes.length})</div>
-      <div class="table-wrap" style="max-height:300px;overflow-y:auto"><table class="data-table">
+      <div class="card-title" style="font-size:.95rem">
+        <i class="fas fa-list"></i> Commandes (${data.commandes.length})
+        ${isAdmin ? '<small class="text-muted" style="font-weight:normal;margin-left:.5rem">Cliquez sur une ligne pour ajuster</small>' : ''}
+      </div>
+      <div class="table-wrap" style="max-height:340px;overflow-y:auto"><table class="data-table">
         <thead><tr>
           <th>Date</th><th>Marque</th>
           <th class="text-right">Brut</th>
@@ -3048,6 +3108,7 @@ function showImportDetailsModal(data) {
           <th class="text-right">DropEat</th>
           <th class="text-right">Comm agent</th>
           <th class="text-right">N+1</th><th class="text-right">N+2</th>
+          ${isAdmin ? '<th class="text-right">Action</th>' : ''}
         </tr></thead>
         <tbody>${data.commandes.map(co => `
           <tr>
@@ -3059,17 +3120,136 @@ function showImportDetailsModal(data) {
             <td class="text-right" style="font-size:.8rem">${fmtEUR((co.commission_agent_montant || 0) + (co.commission_portefeuille_montant || 0))}</td>
             <td class="text-right" style="font-size:.8rem">${fmtEUR(co.commission_n1_montant || 0)}</td>
             <td class="text-right" style="font-size:.8rem">${fmtEUR(co.commission_n2_montant || 0)}</td>
+            ${isAdmin ? `<td class="text-right"><button class="btn btn-sm btn-secondary" data-edit-cmd='${escapeHtml(JSON.stringify(co))}' title="Ajuster"><i class="fas fa-pen"></i></button></td>` : ''}
           </tr>`).join('')}</tbody>
       </table></div>
     </div>` : ''}
 
-    <div class="form-actions" style="margin-top:1rem">
+    <div class="form-actions" style="margin-top:1rem;display:flex;gap:.5rem;flex-wrap:wrap">
+      ${isAdmin ? `
+        <button type="button" class="btn btn-secondary" data-dl-csv><i class="fas fa-download"></i> Télécharger CSV</button>
+        <button type="button" class="btn btn-secondary" data-recalc-modal><i class="fas fa-calculator"></i> Recalculer commissions</button>
+        ${!pf ? '<button type="button" class="btn btn-primary" data-fact-modal><i class="fas fa-file-invoice"></i> Créer facture</button>' : ''}
+      ` : ''}
       <button type="button" class="btn btn-secondary" data-close>Fermer</button>
     </div>
     `,
     { size: 'xl' }
   )
   m.el.querySelector('[data-close]').onclick = () => m.close()
+
+  // Bouton Télécharger CSV (admin)
+  const dlBtn = m.el.querySelector('[data-dl-csv]')
+  if (dlBtn) dlBtn.onclick = async () => {
+    try {
+      const resp = await fetch(baseEndpoint + '/' + imp.id + '/download', { credentials: 'include' })
+      if (!resp.ok) { toast('Erreur téléchargement', 'error'); return }
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `import-${imp.id}.csv`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+      toast('CSV téléchargé')
+    } catch (e) { toast('Erreur', 'error') }
+  }
+
+  // Bouton Recalculer (admin)
+  const rcBtn = m.el.querySelector('[data-recalc-modal]')
+  if (rcBtn) rcBtn.onclick = () => confirmDialog(
+    'Recalculer les commissions de cet import ?',
+    async () => {
+      try {
+        const { data: r } = await api.post(baseEndpoint + '/' + imp.id + '/recalculer')
+        toast(`Commissions recalculées (${r.periodes_recalculees} période(s))`)
+        m.close()
+        navigate('imports')
+      } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+    }
+  )
+
+  // Bouton Créer facture (admin, non-portefeuille)
+  const factBtn = m.el.querySelector('[data-fact-modal]')
+  if (factBtn) factBtn.onclick = async () => {
+    try {
+      const { data: r } = await api.post(baseEndpoint + '/' + imp.id + '/facturer')
+      if (!r.success) { toast(r.error || 'Impossible', 'error'); return }
+      confirmDialog(
+        `Émettre une facture DropEat → ${imp.restaurant_nom}\nPériode : ${r.date_debut} → ${r.date_fin} ?`,
+        async () => {
+          try {
+            const fres = await api.post('/factures/resto/create', {
+              restaurant_id: r.restaurant_id,
+              date_debut: r.date_debut,
+              date_fin: r.date_fin
+            })
+            toast(`Facture ${fres.data.numero} créée — ${fmtEUR(fres.data.montant_ttc)}`)
+            m.close()
+            setTimeout(() => navigate('factures'), 600)
+          } catch (e) { toast(e.response?.data?.error || 'Erreur création facture', 'error') }
+        }
+      )
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
+
+  // Édition d'une commande individuelle (admin)
+  m.el.querySelectorAll('[data-edit-cmd]').forEach(b => b.onclick = () => {
+    let co
+    try { co = JSON.parse(b.dataset.editCmd) } catch { return }
+    openEditCommandeModal(co, baseEndpoint, imp.id, () => { m.close(); navigate('imports') })
+  })
+}
+
+// === Modal édition d'une commande ===
+function openEditCommandeModal(co, baseEndpoint, importId, onSaved) {
+  const m = openModal(
+    `<i class="fas fa-pen"></i> Ajuster commande #${co.id}`,
+    `
+    <div style="background:#fef3c7;border-left:3px solid #f59e0b;padding:.6rem .8rem;border-radius:6px;margin-bottom:1rem;font-size:.85rem">
+      <i class="fas fa-info-circle"></i> Les ajustements manuels sont tracés (auditeur + date). Le recalcul automatique écrasera ces valeurs — utilisez « Recalculer » uniquement si voulu.
+    </div>
+    <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:.7rem">
+      <div class="form-group"><label>Montant brut</label><input id="ec_brut" type="number" step="0.01" value="${co.montant_brut || 0}"/></div>
+      <div class="form-group"><label>Frais Uber</label><input id="ec_fu" type="number" step="0.01" value="${co.frais_uber || 0}"/></div>
+      <div class="form-group"><label>Montant net</label><input id="ec_net" type="number" step="0.01" value="${co.montant_net || 0}"/></div>
+      <div class="form-group"><label>Facturation DropEat</label><input id="ec_fact" type="number" step="0.01" value="${co.montant_facture_resto || 0}"/></div>
+      <div class="form-group"><label>Comm. agent propre</label><input id="ec_ca" type="number" step="0.01" value="${co.commission_agent_montant || 0}"/></div>
+      <div class="form-group"><label>Comm. portefeuille</label><input id="ec_cp" type="number" step="0.01" value="${co.commission_portefeuille_montant || 0}"/></div>
+      <div class="form-group"><label>Comm. N+1</label><input id="ec_n1" type="number" step="0.01" value="${co.commission_n1_montant || 0}"/></div>
+      <div class="form-group"><label>Comm. N+2</label><input id="ec_n2" type="number" step="0.01" value="${co.commission_n2_montant || 0}"/></div>
+    </div>
+    <div class="form-group" style="margin-top:.8rem">
+      <label>Note d'ajustement (raison)</label>
+      <textarea id="ec_notes" rows="2" placeholder="Ex: correction frais Uber suite refacturation"></textarea>
+    </div>
+    <div class="form-actions" style="margin-top:1rem;display:flex;gap:.5rem">
+      <button type="button" class="btn btn-primary" data-save><i class="fas fa-save"></i> Enregistrer ajustement</button>
+      <button type="button" class="btn btn-secondary" data-cancel>Annuler</button>
+    </div>
+    `,
+    { size: 'lg' }
+  )
+  m.el.querySelector('[data-cancel]').onclick = () => m.close()
+  m.el.querySelector('[data-save]').onclick = async () => {
+    const payload = {
+      montant_brut: parseFloat(m.el.querySelector('#ec_brut').value || 0),
+      frais_uber: parseFloat(m.el.querySelector('#ec_fu').value || 0),
+      montant_net: parseFloat(m.el.querySelector('#ec_net').value || 0),
+      montant_facture_resto: parseFloat(m.el.querySelector('#ec_fact').value || 0),
+      commission_agent_montant: parseFloat(m.el.querySelector('#ec_ca').value || 0),
+      commission_portefeuille_montant: parseFloat(m.el.querySelector('#ec_cp').value || 0),
+      commission_n1_montant: parseFloat(m.el.querySelector('#ec_n1').value || 0),
+      commission_n2_montant: parseFloat(m.el.querySelector('#ec_n2').value || 0),
+      notes_ajustement: m.el.querySelector('#ec_notes').value || null
+    }
+    try {
+      await api.put(baseEndpoint + '/commandes/' + co.id, payload)
+      toast('Commande ajustée')
+      m.close()
+      if (onSaved) onSaved()
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+  }
 }
 
 // --- Commissions ---
