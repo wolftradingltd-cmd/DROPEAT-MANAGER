@@ -117,7 +117,7 @@ export async function qualifierElement(
   agentId: number,
   type: TrancheType,
   elementId: number,
-  options: { validation_ecrite?: boolean, validateur_user_id?: number, notes?: string } = {}
+  options: { validation_ecrite?: boolean, validateur_user_id?: number, notes?: string, is_challenge?: boolean } = {}
 ): Promise<{
   ok: boolean,
   position?: number,
@@ -131,28 +131,54 @@ export async function qualifierElement(
     return { ok: false, reason: 'Élément déjà comptabilisé dans une tranche antérieure (revendication rétroactive interdite)' }
   }
 
+  // 1.bis 🛡️ CORRECTIF UNICITÉ RESTAURANT : si on qualifie une marque, le restaurant
+  // sous-jacent ne doit jamais avoir servi (via une autre marque) à qualifier
+  // une tranche pour ce même agent. Sinon double-comptage du même apport.
+  // Exception : si l'élément qualifié est un "challenge" (is_challenge=1), on
+  // n'applique pas cette règle car le challenge a sa propre logique de récompense.
+  if (type === 'marque' && !options.is_challenge) {
+    const dejaResto = await db.prepare(`
+      SELECT te.id, ta.numero_tranche, ta.statut
+      FROM tranche_elements te
+      JOIN marques_virtuelles m2 ON te.element_id = m2.id
+      JOIN tranches_attribution ta ON te.tranche_id = ta.id
+      WHERE te.agent_id = ?
+        AND te.type = 'marque'
+        AND COALESCE(te.is_challenge, 0) = 0
+        AND m2.restaurant_id = (SELECT restaurant_id FROM marques_virtuelles WHERE id = ?)
+      LIMIT 1
+    `).bind(agentId, elementId).first() as any
+    if (dejaResto) {
+      return {
+        ok: false,
+        reason: `Le restaurant de cette marque a déjà été comptabilisé dans la tranche n°${dejaResto.numero_tranche} (${dejaResto.statut}). Un même restaurant ne peut être utilisé qu'une seule fois pour qualifier une tranche (anti double-dipping).`
+      }
+    }
+  }
+
   // 2. Récupérer ou créer la tranche ouverte
   const tranche = await getOrCreateTrancheOuverte(db, agentId, type)
 
   // 3. Compter les éléments déjà dans cette tranche
+  //    (les éléments "challenge" ne comptent PAS dans le palier 5/5 standard)
   const cntRow = await db.prepare(`
-    SELECT COUNT(*) as n FROM tranche_elements WHERE tranche_id = ?
+    SELECT COUNT(*) as n FROM tranche_elements WHERE tranche_id = ? AND COALESCE(is_challenge, 0) = 0
   `).bind(tranche.id).first() as any
   const position = (cntRow?.n || 0) + 1
 
-  if (position > SEUIL_TRANCHE) {
+  if (position > SEUIL_TRANCHE && !options.is_challenge) {
     // Ne devrait jamais arriver (la tranche aurait dû être clôturée au 5e)
     return { ok: false, reason: 'Tranche déjà saturée' }
   }
 
-  const isAttribution = position === SEUIL_TRANCHE
+  const isAttribution = position === SEUIL_TRANCHE && !options.is_challenge
 
   // 4. Insérer l'élément qualifié
   await db.prepare(`
     INSERT INTO tranche_elements
-      (tranche_id, agent_id, type, element_id, position_dans_tranche, is_attribution, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(tranche.id, agentId, type, elementId, position, isAttribution ? 1 : 0, options.notes || null).run()
+      (tranche_id, agent_id, type, element_id, position_dans_tranche, is_attribution, is_challenge, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(tranche.id, agentId, type, elementId, position, isAttribution ? 1 : 0, options.is_challenge ? 1 : 0, options.notes || null).run()
 
   // 5. Si c'est le 5e → clôturer la tranche et marquer l'élément comme portefeuille
   if (isAttribution) {

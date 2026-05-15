@@ -44,6 +44,13 @@ app.get('/eligibles', async (c) => {
 
   // 3) Récupère les marques qualifiées dans cette tranche ouverte (positions 1..4)
   //    Ce sont les SEULES qui peuvent être candidates pour la 5e (portefeuille)
+  //
+  // 🛡️ CORRECTIF ANTI-DOUBLE-DIPPING :
+  //    On exclut toute marque dont le restaurant SOUS-JACENT a déjà été
+  //    utilisé par cet agent dans une tranche CLÔTURÉE précédente. Sinon,
+  //    l'agent pourrait obtenir en portefeuille un restaurant qui a déjà
+  //    servi à qualifier sa tranche n-1 (double comptage du même apport
+  //    commercial).
   const { results } = await c.env.DB.prepare(`
     SELECT m.id, m.nom, m.plateforme, m.uber_store_id,
       r.id as restaurant_id, r.nom as restaurant_nom, r.ville,
@@ -51,6 +58,7 @@ app.get('/eligibles', async (c) => {
       m.heritee_de_resto_id, m.exclue_tranche,
       m.date_lancement, m.statut_marque,
       te.position_dans_tranche,
+      COALESCE(te.is_challenge, 0) as is_challenge,
       (SELECT COUNT(*) FROM commandes co WHERE co.marque_id = m.id AND co.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as nb_commandes,
       (SELECT COALESCE(SUM(co.montant_brut),0) FROM commandes co WHERE co.marque_id = m.id AND co.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as ca_total
     FROM tranche_elements te
@@ -62,13 +70,25 @@ app.get('/eligibles', async (c) => {
       AND te.is_attribution = 0
       AND m.is_portefeuille_proprietaire = 0
       AND COALESCE(m.exclue_tranche, 0) = 0
+      AND COALESCE(te.is_challenge, 0) = 0
+      AND r.id NOT IN (
+        SELECT DISTINCT m2.restaurant_id
+        FROM tranche_elements te2
+        JOIN marques_virtuelles m2 ON te2.element_id = m2.id
+        JOIN tranches_attribution ta2 ON te2.tranche_id = ta2.id
+        WHERE te2.agent_id = ?
+          AND te2.type = 'marque'
+          AND ta2.id != ?
+          AND ta2.statut = 'cloturee'
+      )
     ORDER BY ca_total DESC, te.position_dans_tranche ASC
-  `).bind(agent_id, trancheOuverte.id).all() as any
+  `).bind(agent_id, trancheOuverte.id, agent_id, trancheOuverte.id).all() as any
 
   // 4) Compteur : on a besoin de 4 marques qualifiées avant la 5e (palier 5)
+  //    Les éléments "challenge" sont exclus (ils relèvent du module Challenges)
   const cntRow = await c.env.DB.prepare(`
     SELECT COUNT(*) as n FROM tranche_elements
-    WHERE tranche_id = ? AND is_attribution = 0
+    WHERE tranche_id = ? AND is_attribution = 0 AND COALESCE(is_challenge, 0) = 0
   `).bind(trancheOuverte.id).first() as any
   const nbDansTranche = cntRow?.n || 0
   const palierPret = nbDansTranche >= 4
@@ -134,7 +154,7 @@ app.post('/demande', async (c) => {
   // Règle : la marque candidate doit faire partie de la tranche ouverte courante
   // (palier/tranche : on ne choisit que parmi 1..4 déjà qualifiées dans la tranche)
   const inTranche = await c.env.DB.prepare(`
-    SELECT id, position_dans_tranche FROM tranche_elements
+    SELECT id, position_dans_tranche, COALESCE(is_challenge, 0) as is_challenge FROM tranche_elements
     WHERE tranche_id = ? AND element_id = ? AND type = 'marque' AND COALESCE(is_attribution, 0) = 0
   `).bind(trId, marque_id).first() as any
   if (!inTranche) {
@@ -142,10 +162,38 @@ app.post('/demande', async (c) => {
       error: "Cette marque n'est pas dans votre tranche ouverte courante. Seules les marques 1 à 4 qualifiées dans la tranche actuelle peuvent être choisies."
     }, 400)
   }
+  // Marques marquées "challenge" : régies par le module challenge (récompense), pas par le palier 5/5
+  if (inTranche.is_challenge) {
+    return c.json({
+      error: "Cette marque appartient à un challenge en cours. Elle ne peut pas être choisie via le palier 5/5 standard. Utilisez le module Challenges pour récompenses."
+    }, 400)
+  }
+
+  // 🛡️ CORRECTIF ANTI-DOUBLE-DIPPING :
+  // Le restaurant sous-jacent ne doit pas avoir été utilisé dans une tranche
+  // précédente CLÔTURÉE pour ce même agent (sinon double comptage).
+  const restoDejaUtilise = await c.env.DB.prepare(`
+    SELECT te.id, ta.numero_tranche
+    FROM tranche_elements te
+    JOIN marques_virtuelles m2 ON te.element_id = m2.id
+    JOIN tranches_attribution ta ON te.tranche_id = ta.id
+    WHERE te.agent_id = ?
+      AND te.type = 'marque'
+      AND ta.id != ?
+      AND ta.statut = 'cloturee'
+      AND m2.restaurant_id = (SELECT restaurant_id FROM marques_virtuelles WHERE id = ?)
+    LIMIT 1
+  `).bind(m.agent_id, trId, marque_id).first() as any
+  if (restoDejaUtilise) {
+    return c.json({
+      error: `Restaurant déjà comptabilisé dans la tranche n°${restoDejaUtilise.numero_tranche} (clôturée). Un même restaurant ne peut pas être utilisé pour qualifier deux tranches différentes (anti double-dipping).`
+    }, 400)
+  }
 
   // Le palier 5 doit être atteint : au moins 4 marques qualifiées dans la tranche
+  // (les éléments "challenge" ne comptent pas dans ce palier standard)
   const cntInTranche = await c.env.DB.prepare(
-    `SELECT COUNT(*) as n FROM tranche_elements WHERE tranche_id = ? AND COALESCE(is_attribution,0)=0`
+    `SELECT COUNT(*) as n FROM tranche_elements WHERE tranche_id = ? AND COALESCE(is_attribution,0)=0 AND COALESCE(is_challenge,0)=0`
   ).bind(trId).first() as any
   if ((cntInTranche?.n || 0) < 4) {
     return c.json({
@@ -260,8 +308,9 @@ app.put('/demande/:id/decision', async (c) => {
     `).bind(dateSign, d.marque_choisie_id).run()
 
     // 3) Position 5 dans la tranche + clôture (si pas déjà au cnt=5)
+    //    Les éléments "challenge" sont exclus du compteur du palier standard
     const cntRow = await c.env.DB.prepare(
-      `SELECT COUNT(*) as n FROM tranche_elements WHERE tranche_id = ?`
+      `SELECT COUNT(*) as n FROM tranche_elements WHERE tranche_id = ? AND COALESCE(is_challenge,0)=0`
     ).bind(d.tranche_id).first() as any
     const pos = Math.min(5, (cntRow?.n || 0) + 1)
 
