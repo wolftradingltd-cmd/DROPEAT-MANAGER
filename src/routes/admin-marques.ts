@@ -60,10 +60,10 @@ app.get('/', async (c) => {
       COALESCE(r.is_portefeuille_proprietaire, 0) as resto_portefeuille,
       u.id as agent_id, u.nom as agent_nom, u.prenom as agent_prenom,
       u.niveau as agent_niveau,
-      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as nb_commandes,
-      (SELECT COALESCE(SUM(c.montant_brut), 0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as ca_total,
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as nb_commandes,
+      (SELECT COALESCE(SUM(c.montant_brut), 0) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as ca_total,
       (SELECT COALESCE(SUM(c.commission_agent_montant + c.commission_portefeuille_montant), 0)
-         FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as commissions_total
+         FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as commissions_total
     FROM marques_virtuelles m
     JOIN restaurants r ON m.restaurant_id = r.id
     LEFT JOIN users u ON r.agent_id = u.id

@@ -30,7 +30,7 @@ app.get('/', async (c) => {
   stats.nb_commandes = await cnt("SELECT COUNT(*) as c FROM commandes")
   stats.nb_tablettes_sr_shop = await cnt("SELECT COUNT(*) as c FROM restaurants WHERE actif = 1 AND tablette_sr_shop = 1")
 
-  const ca = await db.prepare("SELECT COALESCE(SUM(montant_brut), 0) as t FROM commandes WHERE statut != 'annulee'").first() as any
+  const ca = await db.prepare("SELECT COALESCE(SUM(montant_brut), 0) as t FROM commandes WHERE statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')").first() as any
   stats.ca_total = ca?.t || 0
 
   // Mois en cours
@@ -42,7 +42,7 @@ app.get('/', async (c) => {
   const fin = `${annee}-${String(mois).padStart(2, '0')}-${lastDay} 23:59:59`
 
   const moisStats = await db.prepare(
-    "SELECT COALESCE(SUM(montant_brut), 0) as ca, COUNT(*) as nb FROM commandes WHERE date_commande >= ? AND date_commande <= ? AND statut != 'annulee'"
+    "SELECT COALESCE(SUM(montant_brut), 0) as ca, COUNT(*) as nb FROM commandes WHERE date_commande >= ? AND date_commande <= ? AND statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')"
   ).bind(debut, fin).first() as any
   stats.ca_mois = moisStats?.ca || 0
   stats.nb_commandes_mois = moisStats?.nb || 0
@@ -59,7 +59,7 @@ app.get('/', async (c) => {
     JOIN restaurants r ON m.restaurant_id = r.id
     LEFT JOIN users u ON r.agent_id = u.id
     LEFT JOIN users u2 ON u.parent_id = u2.id
-    WHERE c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee' AND c.paye_integralement = 1
+    WHERE c.date_commande >= ? AND c.date_commande <= ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.paye_integralement = 1
   `).bind(debut, fin).all() as any
 
   const paliers = await getPaliers(db)
@@ -71,7 +71,7 @@ app.get('/', async (c) => {
       COALESCE(SUM(c.montant_brut), 0) as ca, COUNT(c.id) as nb_commandes
     FROM restaurants r
     LEFT JOIN marques_virtuelles m ON m.restaurant_id = r.id
-    LEFT JOIN commandes c ON c.marque_id = m.id AND c.statut != 'annulee'
+    LEFT JOIN commandes c ON c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     WHERE r.actif = 1
     GROUP BY r.id ORDER BY ca DESC LIMIT 5
   `).all()
@@ -85,7 +85,7 @@ app.get('/', async (c) => {
     FROM users u
     LEFT JOIN restaurants r ON r.agent_id = u.id AND r.actif = 1
     LEFT JOIN marques_virtuelles m ON m.restaurant_id = r.id
-    LEFT JOIN commandes c ON c.marque_id = m.id AND c.statut != 'annulee'
+    LEFT JOIN commandes c ON c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     WHERE u.role = 'agent' AND u.actif = 1
     GROUP BY u.id ORDER BY ca_total DESC LIMIT 5
   `).all()
@@ -94,7 +94,7 @@ app.get('/', async (c) => {
   const { results: evolution } = await db.prepare(`
     SELECT strftime('%Y-%m', date_commande) as mois,
       COALESCE(SUM(montant_brut), 0) as ca, COUNT(*) as nb_commandes
-    FROM commandes WHERE date_commande >= date('now', '-6 months') AND statut != 'annulee'
+    FROM commandes WHERE date_commande >= date('now', '-6 months') AND statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     GROUP BY mois ORDER BY mois
   `).all()
 

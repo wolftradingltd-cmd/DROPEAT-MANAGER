@@ -64,7 +64,7 @@ async function fetchCommandesPeriode(
     LEFT JOIN users u ON r.agent_id = u.id
     LEFT JOIN users p ON u.parent_id = p.id
     WHERE c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut != 'annulee'
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
   `).bind(debut, fin).all() as any
 
   return results as CommandeWithContext[]
@@ -94,7 +94,7 @@ async function fetchCAFilleulsParAgent(
     JOIN users u ON r.agent_id = u.id
     WHERE u.parent_id IS NOT NULL
       AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut != 'annulee'
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     GROUP BY u.parent_id
   `).bind(debut, fin).all() as any
 
@@ -110,7 +110,7 @@ async function fetchCAFilleulsParAgent(
     JOIN users p ON u.parent_id = p.id
     WHERE p.parent_id IS NOT NULL
       AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut != 'annulee'
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     GROUP BY p.parent_id
   `).bind(debut, fin).all() as any
 

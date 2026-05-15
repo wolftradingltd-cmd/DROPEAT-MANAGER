@@ -229,7 +229,7 @@ app.get('/marque/:id/facture', async (c) => {
       COALESCE(SUM(marge_dropeat_montant), 0) as marge_dropeat
     FROM commandes
     WHERE marque_id = ? AND date_commande >= ? AND date_commande <= ?
-      AND statut != 'annulee'
+      AND statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
   `).bind(marqueId, debut, fin).first() as any
 
   // Détail par palier facturation : combien de commandes dans chaque tranche, combien facturé
@@ -244,7 +244,7 @@ app.get('/marque/:id/facture', async (c) => {
     FROM commandes c
     LEFT JOIN paliers_commissions p ON c.palier_facture_id = p.id
     WHERE c.marque_id = ? AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut != 'annulee'
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     GROUP BY c.palier_facture_id
     ORDER BY p.seuil_min
   `).bind(marqueId, debut, fin).all()
@@ -260,7 +260,7 @@ app.get('/marque/:id/facture', async (c) => {
     FROM commandes c
     LEFT JOIN paliers_commissions p ON c.palier_agent_id = p.id
     WHERE c.marque_id = ? AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut != 'annulee'
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     GROUP BY c.palier_agent_id
     ORDER BY p.seuil_min
   `).bind(marqueId, debut, fin).all()

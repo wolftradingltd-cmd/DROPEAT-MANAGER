@@ -281,7 +281,7 @@ app.get('/', async (c) => {
         SUM(COALESCE(c.commission_n1_montant, 0)) as comm_n1,
         SUM(COALESCE(c.commission_n2_montant, 0)) as comm_n2
       FROM commandes c
-      WHERE c.statut != 'annulee' AND c.import_id IS NOT NULL
+      WHERE c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.import_id IS NOT NULL
       GROUP BY c.import_id
     ) stats ON stats.import_id = i.id
   `
@@ -377,7 +377,7 @@ app.get('/:id/details', async (c) => {
       COALESCE(SUM(c.commission_n1_montant), 0) as comm_n1,
       COALESCE(SUM(c.commission_n2_montant), 0) as comm_n2
     FROM commandes c
-    WHERE c.import_id = ? AND c.statut != 'annulee'
+    WHERE c.import_id = ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
   `).bind(id).first() as any
 
   const marge_dropeat_nette = (totaux?.ca_dropeat_brut || 0)
@@ -399,7 +399,7 @@ app.get('/:id/details', async (c) => {
       COALESCE(SUM(c.commission_n2_montant), 0) as comm_n2
     FROM commandes c
     JOIN marques_virtuelles m ON c.marque_id = m.id
-    WHERE c.import_id = ? AND c.statut != 'annulee'
+    WHERE c.import_id = ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     GROUP BY m.id
     ORDER BY ca_brut DESC
   `).bind(id).all() as any
@@ -461,7 +461,7 @@ app.get('/:id/details', async (c) => {
       m.nom as marque_nom
     FROM commandes c
     JOIN marques_virtuelles m ON c.marque_id = m.id
-    WHERE c.import_id = ? AND c.statut != 'annulee'
+    WHERE c.import_id = ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     ORDER BY c.date_commande DESC
     LIMIT 50
   `).bind(id).all() as any

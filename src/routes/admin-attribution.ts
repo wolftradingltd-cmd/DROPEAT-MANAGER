@@ -51,8 +51,8 @@ app.get('/eligibles', async (c) => {
       m.heritee_de_resto_id, m.exclue_tranche,
       m.date_lancement, m.statut_marque,
       te.position_dans_tranche,
-      (SELECT COUNT(*) FROM commandes co WHERE co.marque_id = m.id AND co.statut != 'annulee') as nb_commandes,
-      (SELECT COALESCE(SUM(co.montant_brut),0) FROM commandes co WHERE co.marque_id = m.id AND co.statut != 'annulee') as ca_total
+      (SELECT COUNT(*) FROM commandes co WHERE co.marque_id = m.id AND co.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as nb_commandes,
+      (SELECT COALESCE(SUM(co.montant_brut),0) FROM commandes co WHERE co.marque_id = m.id AND co.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as ca_total
     FROM tranche_elements te
     JOIN marques_virtuelles m ON te.element_id = m.id
     JOIN restaurants r ON m.restaurant_id = r.id

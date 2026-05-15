@@ -86,7 +86,7 @@ async function buildArborescence(
       JOIN restaurants r ON m.restaurant_id = r.id
       WHERE r.agent_id IN (${ph})
         AND c.date_commande >= ? AND c.date_commande <= ?
-        AND c.statut != 'annulee'
+        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
       GROUP BY r.agent_id
     `).bind(...ids, debut, fin).all() as any
     for (const node of all.values()) {

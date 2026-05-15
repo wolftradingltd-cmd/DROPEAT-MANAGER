@@ -273,6 +273,10 @@ export function normalizeStatus(raw: string | null | undefined): string {
   const v = raw.toLowerCase().trim()
   if (v.includes('cancel') || v.includes('annul')) return 'annulee'
   if (v.includes('refund') || v.includes('rembour')) return 'remboursee'
+  // Impayé : "unpaid", "impaye", "chargeback", "dispute"
+  if (v.includes('unpaid') || v.includes('impay') || v.includes('chargeback') || v.includes('dispute')) return 'impayee'
+  // Résilié : "terminated", "resilie", "ended", "closed"
+  if (v.includes('terminat') || v.includes('resili') || v.includes('résili')) return 'resiliee'
   if (v.includes('complet') || v.includes('termin') || v.includes('deliver')) return 'completee'
   return 'completee'
 }

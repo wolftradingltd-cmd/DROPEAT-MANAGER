@@ -41,7 +41,7 @@ async function fetchCommandesAvecContexte(
     LEFT JOIN users u ON r.agent_id = u.id
     LEFT JOIN users u2 ON u.parent_id = u2.id
     WHERE c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut != 'annulee'
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
       AND c.paye_integralement = 1
   `
   const params: any[] = [debut, fin]

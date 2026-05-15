@@ -133,21 +133,21 @@ app.get('/mes-restaurants/tree', async (c) => {
       (SELECT COUNT(*) FROM marques_virtuelles m
         WHERE m.restaurant_id = r.id AND m.is_portefeuille_proprietaire = 1) as nb_marques_portefeuille,
       (SELECT COUNT(*) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
-        WHERE m.restaurant_id = r.id AND c.statut != 'annulee') as nb_commandes_total,
+        WHERE m.restaurant_id = r.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as nb_commandes_total,
       (SELECT COUNT(*) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
-        WHERE m.restaurant_id = r.id AND c.statut != 'annulee'
+        WHERE m.restaurant_id = r.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
           AND c.date_commande >= ? AND c.date_commande <= ?) as nb_commandes_periode,
       (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
-        WHERE m.restaurant_id = r.id AND c.statut != 'annulee') as ca_total,
+        WHERE m.restaurant_id = r.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as ca_total,
       (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
-        WHERE m.restaurant_id = r.id AND c.statut != 'annulee'
+        WHERE m.restaurant_id = r.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
           AND c.date_commande >= ? AND c.date_commande <= ?) as ca_periode,
       (SELECT COALESCE(SUM(c.commission_agent_montant)+SUM(c.commission_portefeuille_montant),0)
         FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
-        WHERE m.restaurant_id = r.id AND c.statut != 'annulee'
+        WHERE m.restaurant_id = r.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
           AND c.date_commande >= ? AND c.date_commande <= ?) as commissions_periode,
       (SELECT MAX(c.date_commande) FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
-        WHERE m.restaurant_id = r.id AND c.statut != 'annulee') as derniere_commande
+        WHERE m.restaurant_id = r.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as derniere_commande
     FROM restaurants r
     LEFT JOIN users u ON r.agent_id = u.id
     LEFT JOIN users p ON u.parent_id = p.id
@@ -170,16 +170,16 @@ app.get('/mes-restaurants/tree', async (c) => {
       m.uber_orders_email, m.uber_orders_url,
       m.tablette_fournie, m.tablette_serial,
       m.commission_info, m.acces_operationnels,
-      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as nb_commandes_total,
-      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as nb_commandes_total,
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
         AND c.date_commande >= ? AND c.date_commande <= ?) as nb_commandes_periode,
-      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as ca_total,
-      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as ca_total,
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
         AND c.date_commande >= ? AND c.date_commande <= ?) as ca_periode,
       (SELECT COALESCE(SUM(c.commission_agent_montant)+SUM(c.commission_portefeuille_montant),0)
-        FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+        FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
         AND c.date_commande >= ? AND c.date_commande <= ?) as commissions_periode,
-      (SELECT MAX(c.date_commande) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as derniere_commande
+      (SELECT MAX(c.date_commande) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as derniere_commande
     FROM marques_virtuelles m
     WHERE m.restaurant_id IN (${ph})
     ORDER BY m.rang_creation ASC, m.id ASC
@@ -315,15 +315,15 @@ app.get('/portefeuille', async (c) => {
       m.is_portefeuille_proprietaire, m.date_signature_portefeuille,
       r.id as restaurant_id, r.nom as restaurant_nom, r.ville,
       r.agent_id, u.nom as agent_nom, u.prenom as agent_prenom,
-      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
         AND c.date_commande >= ? AND c.date_commande <= ?) as nb_commandes_periode,
-      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
         AND c.date_commande >= ? AND c.date_commande <= ?) as ca_periode,
       (SELECT COALESCE(SUM(c.commission_portefeuille_montant),0)
-        FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee'
+        FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
         AND c.date_commande >= ? AND c.date_commande <= ?) as commissions_portefeuille_periode,
-      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as nb_commandes_total,
-      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut != 'annulee') as ca_total
+      (SELECT COUNT(*) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as nb_commandes_total,
+      (SELECT COALESCE(SUM(c.montant_brut),0) FROM commandes c WHERE c.marque_id = m.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')) as ca_total
     FROM marques_virtuelles m
     JOIN restaurants r ON m.restaurant_id = r.id
     LEFT JOIN users u ON r.agent_id = u.id
@@ -732,7 +732,7 @@ app.get('/commissions', async (c) => {
     LEFT JOIN users u ON r.agent_id = u.id
     LEFT JOIN users u2 ON u.parent_id = u2.id
     WHERE c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut != 'annulee' AND c.paye_integralement = 1
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.paye_integralement = 1
   `).bind(debut, fin).all() as any
 
   const paliers = await getPaliers(c.env.DB)
@@ -825,12 +825,12 @@ app.get('/mlm-tree', async (c) => {
       (SELECT COALESCE(SUM(c.commission_agent_montant),0) + COALESCE(SUM(c.commission_portefeuille_montant),0)
         FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
         JOIN restaurants r ON m.restaurant_id = r.id
-        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
       ) as ca_periode,
       (SELECT COALESCE(SUM(c.montant_brut),0)
         FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
         JOIN restaurants r ON m.restaurant_id = r.id
-        WHERE r.agent_id = u.id AND c.statut != 'annulee'
+        WHERE r.agent_id = u.id AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
       ) as ca_total
     FROM users u WHERE u.parent_id = ? AND u.role = 'agent'
     ORDER BY u.nom, u.prenom
@@ -847,7 +847,7 @@ app.get('/mlm-tree', async (c) => {
         (SELECT COALESCE(SUM(c.commission_agent_montant),0)
           FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
           JOIN restaurants r ON m.restaurant_id = r.id
-          WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+          WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
         ) as ca_periode
       FROM users u WHERE u.parent_id IN (${ph}) AND u.role = 'agent'
       ORDER BY u.nom, u.prenom
@@ -903,7 +903,7 @@ app.get('/commissions/history', async (c) => {
       JOIN restaurants r ON m.restaurant_id = r.id
       WHERE r.agent_id IN ${inClause}
         AND c.date_commande >= date('now', '-90 day')
-        AND c.statut != 'annulee'
+        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
       GROUP BY periode
       ORDER BY periode DESC LIMIT 12
     `).bind(me.id, me.id, me.id, me.id, ...branchIds).all() as any
@@ -919,7 +919,7 @@ app.get('/commissions/history', async (c) => {
     JOIN restaurants r ON m.restaurant_id = r.id
     WHERE r.agent_id IN ${inClause}
       AND c.date_commande >= date('now', '-12 month')
-      AND c.statut != 'annulee'
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
     GROUP BY periode
     ORDER BY periode DESC LIMIT 12
   `).bind(me.id, me.id, me.id, me.id, ...branchIds).all() as any
@@ -950,17 +950,17 @@ app.get('/sous-agents/commissions', async (c) => {
       (SELECT COUNT(c.id) FROM commandes c
         JOIN marques_virtuelles m ON c.marque_id = m.id
         JOIN restaurants r ON m.restaurant_id = r.id
-        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
       ) as nb_commandes,
       (SELECT COALESCE(SUM(c.commission_agent_montant),0) + COALESCE(SUM(c.commission_portefeuille_montant),0)
         FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
         JOIN restaurants r ON m.restaurant_id = r.id
-        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
       ) as commissions_propres,
       (SELECT COALESCE(SUM(c.montant_brut),0)
         FROM commandes c JOIN marques_virtuelles m ON c.marque_id = m.id
         JOIN restaurants r ON m.restaurant_id = r.id
-        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut != 'annulee'
+        WHERE r.agent_id = u.id AND c.date_commande >= ? AND c.date_commande <= ? AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
       ) as ca_periode
     FROM users u LEFT JOIN users p ON u.parent_id = p.id
     WHERE u.id IN (${ph}) AND u.role = 'agent'
