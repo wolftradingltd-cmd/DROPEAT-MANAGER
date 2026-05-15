@@ -280,6 +280,7 @@ const ADMIN_NAV = [
   { section: 'OPÉRATIONS' },
   { id: 'imports', label: 'Imports CSV', icon: 'fa-file-csv' },
   { id: 'commissions', label: 'Commissions', icon: 'fa-coins' },
+  { id: 'derogations', label: 'Dérogations 100%', icon: 'fa-star' },
   { id: 'paiements', label: 'Paiements', icon: 'fa-money-check-dollar' },
   { id: 'admin-demandes-paiement', label: 'Demandes de paiement', icon: 'fa-hand-holding-dollar' },
   { id: 'attributions', label: 'Demandes 5e marque', icon: 'fa-trophy' },
@@ -3937,6 +3938,305 @@ PAGES['audit'] = async (c) => {
         `).join('') || '<tr><td colspan="6" class="text-muted text-center">Aucune action</td></tr>'}</tbody>
       </table>
     </div>`
+}
+
+// --- Dérogations 100% exceptionnelles ---
+PAGES['derogations'] = async (c) => {
+  c.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1><i class="fas fa-star"></i> Dérogations 100% exceptionnelles</h1>
+        <div class="subtitle">Octroyer ponctuellement 100% de la facturation à un agent (hors régime Portefeuille Propriétaire)</div>
+      </div>
+      <button class="btn btn-primary" id="btn-nouvelle-derog"><i class="fas fa-plus"></i> Nouvelle dérogation</button>
+    </div>
+
+    <div class="card mb-3" style="background:#fef3c7;border-left:4px solid #f59e0b;padding:12px 16px;">
+      <div style="font-size:13px;color:#78350f;">
+        <i class="fas fa-info-circle"></i> <strong>Règles métier :</strong>
+        Une dérogation 100% reverse la totalité de la facturation à l'agent (DropEat marge = 0, pas de remontée N+1/N+2).
+        Elle ne peut s'appliquer qu'à un resto/marque <strong>NON</strong> en portefeuille propriétaire.
+        Pour les Portefeuilles Propriétaires, le régime 100% est déjà actif via le contrat signé.
+      </div>
+    </div>
+
+    <div class="filters">
+      <select id="filter-statut" class="form-control">
+        <option value="">Tous statuts</option>
+        <option value="active">Actives</option>
+        <option value="cloturee">Clôturées</option>
+        <option value="expiree">Expirées</option>
+      </select>
+    </div>
+
+    <div id="derog-list">Chargement…</div>
+  `
+
+  async function loadList() {
+    const statut = c.querySelector('#filter-statut').value
+    const params = statut ? `?statut=${statut}` : ''
+    const { data } = await api.get(`/admin/derogations${params}`)
+    const list = data.derogations || []
+    const listEl = c.querySelector('#derog-list')
+    if (list.length === 0) {
+      listEl.innerHTML = '<div class="card empty-state"><i class="fas fa-inbox"></i><div>Aucune dérogation pour le moment</div></div>'
+      return
+    }
+    listEl.innerHTML = `
+      <div class="card">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Cible</th>
+              <th>Agent bénéficiaire</th>
+              <th>Période</th>
+              <th>Motif</th>
+              <th>Créée par</th>
+              <th>Statut</th>
+              <th class="text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${list.map(d => `
+              <tr>
+                <td>#${d.id}</td>
+                <td>
+                  ${d.marque_id
+                    ? `<span class="badge badge-info"><i class="fas fa-tag"></i> Marque</span><br><strong>${d.marque_nom || '—'}</strong>`
+                    : `<span class="badge badge-secondary"><i class="fas fa-store"></i> Restaurant</span><br><strong>${d.restaurant_nom || '—'}</strong>`}
+                </td>
+                <td>${d.agent_prenom || ''} ${d.agent_nom || ''}<br><small>${d.agent_email || ''}</small></td>
+                <td>${d.date_debut}<br>→ ${d.date_fin || '<em>ouvert</em>'}</td>
+                <td><small>${(d.motif || '').substring(0, 80)}${(d.motif || '').length > 80 ? '…' : ''}</small></td>
+                <td><small>${d.cree_par_prenom || ''} ${d.cree_par_nom || ''}<br>${d.cree_at ? new Date(d.cree_at).toLocaleDateString('fr-FR') : ''}</small></td>
+                <td>
+                  ${d.statut === 'active' ? '<span class="badge badge-success">Active</span>' :
+                    d.statut === 'cloturee' ? '<span class="badge badge-secondary">Clôturée</span>' :
+                    '<span class="badge badge-warning">Expirée</span>'}
+                </td>
+                <td class="text-right">
+                  <button class="btn btn-sm btn-secondary" data-view="${d.id}" title="Voir détail + impact"><i class="fas fa-eye"></i></button>
+                  ${d.statut === 'active' ? `<button class="btn btn-sm btn-warning" data-cloturer="${d.id}" title="Clôturer"><i class="fas fa-stop"></i></button>` : ''}
+                  ${d.statut === 'active' ? `<button class="btn btn-sm btn-danger" data-del="${d.id}" title="Supprimer (si pas de commandes)"><i class="fas fa-trash"></i></button>` : ''}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `
+
+    // Click handlers
+    listEl.querySelectorAll('[data-view]').forEach(b => b.onclick = () => openDerogDetailModal(b.dataset.view, loadList))
+    listEl.querySelectorAll('[data-cloturer]').forEach(b => b.onclick = async () => {
+      const motif = prompt('Motif de clôture (min 3 caractères) :')
+      if (!motif || motif.trim().length < 3) return
+      try {
+        await api.post(`/admin/derogations/${b.dataset.cloturer}/cloturer`, { motif_cloture: motif })
+        toast('Dérogation clôturée + recalcul des commissions effectué')
+        loadList()
+      } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+    })
+    listEl.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+      if (!confirm('Supprimer définitivement cette dérogation ? (impossible si des commandes y sont déjà rattachées)')) return
+      try {
+        await api.delete(`/admin/derogations/${b.dataset.del}`)
+        toast('Supprimée')
+        loadList()
+      } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+    })
+  }
+
+  c.querySelector('#filter-statut').onchange = loadList
+  c.querySelector('#btn-nouvelle-derog').onclick = () => openDerogCreateModal(loadList)
+  await loadList()
+}
+
+// Modal : créer une dérogation
+async function openDerogCreateModal(onSaved) {
+  // Charger les éligibles + commerciaux
+  const [eligRes, usersRes] = await Promise.all([
+    api.get('/admin/derogations/eligibles'),
+    api.get('/admin/agents-crud')
+  ])
+  const restaurants = eligRes.data.restaurants || []
+  const marques = eligRes.data.marques || []
+  const agents = (usersRes.data.agents || usersRes.data || []).filter(u => ['agent_commercial', 'sous_agent_n1', 'sous_agent_n2', 'agent', 'commercial'].includes(u.role) || u.niveau != null)
+
+  const modal = document.createElement('div')
+  modal.className = 'modal-overlay'
+  modal.innerHTML = `
+    <div class="modal" style="max-width:640px;">
+      <div class="modal-header">
+        <h3><i class="fas fa-star"></i> Nouvelle dérogation 100%</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Type de cible *</label>
+          <div style="display:flex;gap:12px;">
+            <label><input type="radio" name="cibleType" value="restaurant" checked> Restaurant entier</label>
+            <label><input type="radio" name="cibleType" value="marque"> Marque virtuelle</label>
+          </div>
+        </div>
+
+        <div class="form-group" id="grp-resto">
+          <label>Restaurant *</label>
+          <select id="cible-resto" class="form-control">
+            <option value="">— Choisir —</option>
+            ${restaurants.map(r => `<option value="${r.id}" data-agent="${r.agent_id || ''}">
+              ${r.nom} (${r.ville || ''}) ${r.agent_prenom ? '- ' + r.agent_prenom + ' ' + r.agent_nom : '⚠️ aucun agent'}
+              ${r.nb_derogations_actives > 0 ? ' [⚠️ ' + r.nb_derogations_actives + ' active(s)]' : ''}
+            </option>`).join('')}
+          </select>
+        </div>
+
+        <div class="form-group" id="grp-marque" style="display:none;">
+          <label>Marque virtuelle *</label>
+          <select id="cible-marque" class="form-control">
+            <option value="">— Choisir —</option>
+            ${marques.map(m => `<option value="${m.id}" data-agent="${m.agent_id || ''}">
+              ${m.nom} (resto: ${m.restaurant_nom || '?'}) ${m.agent_prenom ? '- ' + m.agent_prenom + ' ' + m.agent_nom : '⚠️ aucun agent'}
+              ${m.nb_derogations_actives > 0 ? ' [⚠️ ' + m.nb_derogations_actives + ' active(s)]' : ''}
+            </option>`).join('')}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Agent bénéficiaire * <small>(par défaut : agent rattaché au resto/marque)</small></label>
+          <select id="agent-id" class="form-control" required>
+            <option value="">— Choisir —</option>
+            ${agents.map(a => `<option value="${a.id}">${a.prenom || ''} ${a.nom || ''} (${a.email || ''})</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="form-row" style="display:flex;gap:12px;">
+          <div class="form-group" style="flex:1;">
+            <label>Date début *</label>
+            <input type="date" id="date-debut" class="form-control" value="${new Date().toISOString().substring(0, 10)}" required>
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label>Date fin <small>(vide = ouverte)</small></label>
+            <input type="date" id="date-fin" class="form-control">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Motif * <small>(obligatoire pour audit)</small></label>
+          <textarea id="motif" class="form-control" rows="3" placeholder="Ex: Récompense exceptionnelle pour performance commerciale Mai 2026" required></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary modal-close">Annuler</button>
+        <button class="btn btn-primary" id="btn-save"><i class="fas fa-save"></i> Créer la dérogation</button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(modal)
+
+  // Toggle resto/marque
+  modal.querySelectorAll('input[name=cibleType]').forEach(r => r.onchange = () => {
+    const type = modal.querySelector('input[name=cibleType]:checked').value
+    modal.querySelector('#grp-resto').style.display = type === 'restaurant' ? '' : 'none'
+    modal.querySelector('#grp-marque').style.display = type === 'marque' ? '' : 'none'
+  })
+
+  // Auto-sélection agent quand on choisit une cible
+  const autoFillAgent = (sel) => {
+    const opt = sel.options[sel.selectedIndex]
+    const aid = opt?.dataset?.agent
+    if (aid) modal.querySelector('#agent-id').value = aid
+  }
+  modal.querySelector('#cible-resto').onchange = (e) => autoFillAgent(e.target)
+  modal.querySelector('#cible-marque').onchange = (e) => autoFillAgent(e.target)
+
+  // Close handlers
+  modal.querySelectorAll('.modal-close').forEach(b => b.onclick = () => modal.remove())
+
+  // Save
+  modal.querySelector('#btn-save').onclick = async () => {
+    const type = modal.querySelector('input[name=cibleType]:checked').value
+    const cibleId = type === 'restaurant'
+      ? modal.querySelector('#cible-resto').value
+      : modal.querySelector('#cible-marque').value
+    if (!cibleId) { toast('Choisissez une cible', 'error'); return }
+    const agentId = modal.querySelector('#agent-id').value
+    if (!agentId) { toast('Choisissez un agent bénéficiaire', 'error'); return }
+    const dateDebut = modal.querySelector('#date-debut').value
+    const dateFin = modal.querySelector('#date-fin').value || null
+    const motif = modal.querySelector('#motif').value.trim()
+    if (!dateDebut) { toast('Date début obligatoire', 'error'); return }
+    if (motif.length < 3) { toast('Motif obligatoire (min 3 caractères)', 'error'); return }
+
+    const body = {
+      agent_id: parseInt(agentId),
+      date_debut: dateDebut,
+      date_fin: dateFin,
+      motif
+    }
+    if (type === 'restaurant') body.restaurant_id = parseInt(cibleId)
+    else body.marque_id = parseInt(cibleId)
+
+    try {
+      await api.post('/admin/derogations', body)
+      toast('Dérogation créée + recalcul des commissions effectué')
+      modal.remove()
+      onSaved?.()
+    } catch (err) {
+      toast(err.response?.data?.error || 'Erreur', 'error')
+    }
+  }
+}
+
+// Modal : voir détail + impact
+async function openDerogDetailModal(id, onClosed) {
+  try {
+    const { data } = await api.get(`/admin/derogations/${id}`)
+    const d = data.derogation
+    const impact = data.impact || {}
+    const modal = document.createElement('div')
+    modal.className = 'modal-overlay'
+    modal.innerHTML = `
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-header">
+          <h3><i class="fas fa-star"></i> Dérogation #${d.id}</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div><strong>Cible :</strong><br>${d.marque_id ? '🏷️ Marque <strong>' + (d.marque_nom || '—') + '</strong>' : '🏪 Restaurant <strong>' + (d.restaurant_nom || '—') + '</strong>'}</div>
+            <div><strong>Agent :</strong><br>${d.agent_prenom || ''} ${d.agent_nom || ''}<br><small>${d.agent_email || ''}</small></div>
+            <div><strong>Période :</strong><br>${d.date_debut} → ${d.date_fin || 'ouvert'}</div>
+            <div><strong>Statut :</strong><br>${d.statut}</div>
+          </div>
+          <hr/>
+          <div><strong>Motif :</strong><br><em>${d.motif || ''}</em></div>
+          ${d.motif_cloture ? `<div style="margin-top:8px;"><strong>Motif clôture :</strong><br><em>${d.motif_cloture}</em></div>` : ''}
+          <hr/>
+          <div><strong>Créée par :</strong> ${d.cree_par_prenom || ''} ${d.cree_par_nom || ''} le ${d.cree_at ? new Date(d.cree_at).toLocaleString('fr-FR') : '—'}</div>
+          ${d.cloturee_at ? `<div><strong>Clôturée par :</strong> ${d.cloturee_par_prenom || ''} ${d.cloturee_par_nom || ''} le ${new Date(d.cloturee_at).toLocaleString('fr-FR')}</div>` : ''}
+          <hr/>
+          <div class="card" style="background:#f0fdf4;border-left:4px solid #16a34a;padding:12px;">
+            <strong><i class="fas fa-chart-line"></i> Impact sur les commandes :</strong>
+            <table style="width:100%;margin-top:8px;font-size:14px;">
+              <tr><td>Nombre de commandes :</td><td class="text-right"><strong>${impact.nb_commandes || 0}</strong></td></tr>
+              <tr><td>CA brut (montant commandes) :</td><td class="text-right"><strong>${(impact.ca_brut || 0).toFixed(2)} €</strong></td></tr>
+              <tr><td>Facturation redirigée vers agent :</td><td class="text-right"><strong>${(impact.facturation_redirigee || 0).toFixed(2)} €</strong></td></tr>
+              <tr><td>Commission agent (100%) :</td><td class="text-right"><strong>${(impact.commission_agent_redirigee || 0).toFixed(2)} €</strong></td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close">Fermer</button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(modal)
+    modal.querySelectorAll('.modal-close').forEach(b => b.onclick = () => { modal.remove(); onClosed?.() })
+  } catch (err) {
+    toast(err.response?.data?.error || 'Erreur', 'error')
+  }
 }
 
 // --- Paliers ---

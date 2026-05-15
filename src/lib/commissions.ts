@@ -103,6 +103,7 @@ export interface CalculCommandeResult {
   commission_grand_parent: number  // Ce que touche le grand-parent (si apporteur N2)
   marge_dropeat: number            // Marge nette pour DropEat
   is_portefeuille: boolean
+  is_derogation: boolean           // Dérogation 100% exceptionnelle (hors portefeuille)
   tablette: boolean
   // Traçabilité 100% : ids des paliers appliqués
   palier_facture_id: number | null
@@ -119,6 +120,7 @@ export function calculerCommissionCommande(params: {
   montant_commande: number
   tablette_sr_shop: boolean
   is_portefeuille_proprietaire: boolean
+  is_derogation_100pct?: boolean   // Dérogation 100% exceptionnelle (hors portefeuille)
   agent_niveau: number | null  // 0=Agent commercial, 1=Sous-agent N1, 2=Sous-agent N2
   has_parent: boolean
   has_grand_parent: boolean
@@ -128,11 +130,16 @@ export function calculerCommissionCommande(params: {
     montant_commande,
     tablette_sr_shop,
     is_portefeuille_proprietaire,
+    is_derogation_100pct = false,
     agent_niveau,
     has_parent,
     has_grand_parent,
     paliers
   } = params
+
+  // Règle métier : le portefeuille prime sur la dérogation (cumul interdit)
+  // Donc si une commande est en portefeuille, on ignore la dérogation
+  const derogationEffective = is_derogation_100pct && !is_portefeuille_proprietaire
 
   // Facturation restaurant (avec ou sans tablette)
   const facturationPaliers = tablette_sr_shop
@@ -142,8 +149,10 @@ export function calculerCommissionCommande(params: {
   const facturation_restaurant = palierFacture?.montant_par_commande || 0
 
   // Commission agent (apporteur direct du resto)
-  // Si Portefeuille Propriétaire => 100% (= grille agent_portefeuille)
-  // Sinon => commission standard
+  // - Si Portefeuille Propriétaire => 100% (grille agent_portefeuille)
+  // - Si Dérogation 100% exceptionnelle => 100% (= montant facturation_restaurant)
+  //   → l'agent touche EXACTEMENT ce que DropEat aurait facturé (marge DropEat = 0)
+  // - Sinon => commission standard
   let commission_agent = 0
   let type_commission_agent = 'aucune'
   let palierAgent: Palier | null = null
@@ -152,6 +161,13 @@ export function calculerCommissionCommande(params: {
       palierAgent = getPalierForOrder(montant_commande, paliers.agent_portefeuille)
       commission_agent = palierAgent?.montant_par_commande || 0
       type_commission_agent = 'portefeuille_proprietaire'
+    } else if (derogationEffective) {
+      // Dérogation : l'agent prend 100% de la facturation (= même montant que ce que
+      // DropEat aurait pris). On utilise le palier de facturation comme référence
+      // pour la traçabilité, mais le montant est celui de la facturation_restaurant.
+      palierAgent = palierFacture
+      commission_agent = facturation_restaurant
+      type_commission_agent = 'derogation_100pct'
     } else {
       palierAgent = getPalierForOrder(montant_commande, paliers.agent_standard)
       commission_agent = palierAgent?.montant_par_commande || 0
@@ -159,14 +175,14 @@ export function calculerCommissionCommande(params: {
     }
   }
 
-  // Commissions remontées MLM (uniquement si pas Portefeuille Propriétaire)
-  // Si l'apporteur est un sous-agent N1 => son parent (agent commercial) touche commission n1
-  // Si l'apporteur est un sous-agent N2 => son parent (sous-agent N1) touche n1, et son grand-parent (agent commercial) touche n2
+  // Commissions remontées MLM
+  // Règle : PAS de remontée si Portefeuille Propriétaire OU Dérogation 100%
+  // (cohérent : l'agent prend tout, il ne reste rien pour les parents)
   let commission_parent = 0
   let commission_grand_parent = 0
   let palierN1: Palier | null = null
   let palierN2: Palier | null = null
-  if (!is_portefeuille_proprietaire && agent_niveau !== null) {
+  if (!is_portefeuille_proprietaire && !derogationEffective && agent_niveau !== null) {
     if (has_parent) {
       if (agent_niveau === 1) {
         palierN1 = getPalierForOrder(montant_commande, paliers.sous_agent_n1)
@@ -195,6 +211,7 @@ export function calculerCommissionCommande(params: {
     commission_grand_parent,
     marge_dropeat,
     is_portefeuille: is_portefeuille_proprietaire,
+    is_derogation: derogationEffective,
     tablette: tablette_sr_shop,
     palier_facture_id: palierFacture?.id ?? null,
     palier_agent_id: palierAgent?.id ?? null,
@@ -228,6 +245,9 @@ export interface CommandeWithContext {
   agent_niveau: number | null
   agent_parent_id: number | null
   agent_grand_parent_id: number | null
+  // Dérogation 100% exceptionnelle (jointure avec derogations_100pct)
+  // Si non-null = id de la dérogation active à la date de la commande
+  derogation_id?: number | null
 }
 
 /**
@@ -337,6 +357,7 @@ export function calculerCommissionsPeriode(
       montant_commande: cmd.montant_brut,
       tablette_sr_shop: !!cmd.tablette_sr_shop,
       is_portefeuille_proprietaire: isPortefeuille,
+      is_derogation_100pct: !!cmd.derogation_id,
       agent_niveau: cmd.agent_niveau,
       has_parent: cmd.agent_parent_id !== null,
       has_grand_parent: cmd.agent_grand_parent_id !== null,
@@ -373,7 +394,8 @@ export function calculerCommissionsPeriode(
     // Par agent : commission propre (apporteur direct)
     if (cmd.agent_id && calc.commission_agent > 0) {
       const a = getOrCreateAgentDetail(result.par_agent, cmd.agent_id)
-      if (isPortefeuille) {
+      // Portefeuille OU dérogation → bucket "portefeuille" (100% agent)
+      if (isPortefeuille || calc.is_derogation) {
         a.commission_portefeuille += calc.commission_agent
         a.nb_commandes_portefeuille++
       } else {

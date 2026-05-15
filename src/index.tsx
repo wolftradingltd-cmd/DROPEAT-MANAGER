@@ -28,6 +28,7 @@ import societes from './routes/societes'
 import factures from './routes/factures'
 import adminAgentsCrud from './routes/admin-agents-crud'
 import adminMarques from './routes/admin-marques'
+import adminDerogations from './routes/admin-derogations'
 import demandesPaiement from './routes/demandes-paiement'
 import challenges from './routes/challenges'
 
@@ -57,6 +58,7 @@ app.route('/api/admin/tracabilite', adminTracabilite)
 app.route('/api/admin/comptes', adminComptes)
 app.route('/api/admin/agents-crud', adminAgentsCrud)
 app.route('/api/admin/marques', adminMarques)
+app.route('/api/admin/derogations', adminDerogations)
 app.route('/api/shortener', adminShortener)
 
 // Profils société (tout user authentifié)

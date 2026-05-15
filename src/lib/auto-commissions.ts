@@ -44,6 +44,9 @@ async function fetchCommandesPeriode(
   const finMois = new Date(annee, mois, 0).getDate()
   const fin = `${annee}-${String(mois).padStart(2, '0')}-${String(finMois).padStart(2, '0')}`
 
+  // Récupère aussi pour chaque commande l'id d'une éventuelle dérogation
+  // 100% active à la date de la commande (sur marque OU sur restaurant).
+  // Une dérogation est active si statut='active' ET date_commande IN [date_debut, date_fin OR ∞]
   const { results } = await db.prepare(`
     SELECT
       c.id, c.date_commande, c.montant_brut,
@@ -57,7 +60,17 @@ async function fetchCommandesPeriode(
       r.agent_id,
       u.niveau as agent_niveau,
       u.parent_id as agent_parent_id,
-      p.parent_id as agent_grand_parent_id
+      p.parent_id as agent_grand_parent_id,
+      (
+        SELECT d.id FROM derogations_100pct d
+        WHERE d.statut = 'active'
+          AND substr(c.date_commande, 1, 10) >= d.date_debut
+          AND (d.date_fin IS NULL OR substr(c.date_commande, 1, 10) <= d.date_fin)
+          AND ((d.marque_id IS NOT NULL AND d.marque_id = m.id)
+            OR (d.restaurant_id IS NOT NULL AND d.restaurant_id = r.id))
+        ORDER BY d.cree_at DESC
+        LIMIT 1
+      ) as derogation_id
     FROM commandes c
     JOIN marques_virtuelles m ON c.marque_id = m.id
     JOIN restaurants r ON m.restaurant_id = r.id
@@ -149,10 +162,14 @@ export async function recalculerCommissionsPeriode(
     // Portefeuille effectif uniquement à partir de la date de signature du contrat
     const isPortefeuille = isOrderUnderPortefeuille(cmd as any)
     const tablette = !!(cmd as any).tablette_sr_shop
+    const derogationId = (cmd as any).derogation_id || null
+    // La dérogation n'est effective que si pas déjà en portefeuille (cumul interdit)
+    const isDerogation = !!derogationId && !isPortefeuille
     const calc = calculerCommissionCommande({
       montant_commande: cmd.montant_brut,
       tablette_sr_shop: tablette,
       is_portefeuille_proprietaire: isPortefeuille,
+      is_derogation_100pct: isDerogation,
       agent_niveau: cmd.agent_niveau,
       has_parent: cmd.agent_parent_id !== null,
       has_grand_parent: cmd.agent_grand_parent_id !== null,
@@ -161,9 +178,11 @@ export async function recalculerCommissionsPeriode(
     const tauxPropre = cmd.montant_brut > 0
       ? Math.round((calc.commission_agent / cmd.montant_brut) * 10000) / 100
       : 0
-    // Si portefeuille => commission_agent_montant = 0 et commission_portefeuille_montant = montant
-    const commPortefeuille = isPortefeuille ? calc.commission_agent : 0
-    const commPropre       = isPortefeuille ? 0 : calc.commission_agent
+    // Portefeuille OU dérogation → 100% agent rangé dans bucket "portefeuille"
+    // (cohérence comptable : tous les "100% agent" sont dans le même seau)
+    const has100pct = isPortefeuille || isDerogation
+    const commPortefeuille = has100pct ? calc.commission_agent : 0
+    const commPropre       = has100pct ? 0 : calc.commission_agent
     await db.prepare(`
       UPDATE commandes SET
         montant_facture_resto         = ?,
@@ -177,6 +196,8 @@ export async function recalculerCommissionsPeriode(
         palier_agent_id               = ?,
         is_portefeuille_snapshot      = ?,
         is_tablette_snapshot          = ?,
+        derogation_id                 = ?,
+        is_derogation_snapshot        = ?,
         commission_calculee_at        = CURRENT_TIMESTAMP
       WHERE id = ?
     `).bind(
@@ -191,6 +212,8 @@ export async function recalculerCommissionsPeriode(
       calc.palier_agent_id,
       isPortefeuille ? 1 : 0,
       tablette ? 1 : 0,
+      isDerogation ? derogationId : null,
+      isDerogation ? 1 : 0,
       cmd.id
     ).run()
   }
