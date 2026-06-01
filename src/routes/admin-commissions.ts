@@ -276,13 +276,6 @@ app.get('/commandes', async (c) => {
 
   const { results } = await c.env.DB.prepare(q).bind(...params).all() as any
 
-  // Calculer commission par commande
-  const enriched = results.map((row: any) => {
-    const isPf = !!(row.resto_pf || row.marque_pf)
-    const facPaliers = row.tablette_sr_shop ? paliers ? null : null : null
-    return row
-  })
-
   return c.json({ commandes: results })
 })
 

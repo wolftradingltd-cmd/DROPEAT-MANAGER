@@ -377,7 +377,10 @@ function renderApp(mode) {
   navigate(first)
 }
 
+let CURRENT_PAGE = null
+
 function navigate(page) {
+  CURRENT_PAGE = page
   const c = document.getElementById('mainContent')
   c.innerHTML = '<div class="loading-screen" style="min-height:300px"><div class="spinner"></div></div>'
 
@@ -3595,6 +3598,13 @@ async function prospectModal(prospect, baseEndpoint) {
             <div class="form-group"><label>Prochaine relance</label><input id="pRelance" type="date" value="${prospect?.prochaine_relance || ''}" /></div>
           </div>
           <div class="form-group"><label>Notes</label><textarea id="pNotes" rows="3">${escapeHtml(prospect?.notes || '')}</textarea></div>
+          <div class="card" style="background:#f5f3ff;border-left:3px solid #8b5cf6;margin:.5rem 0">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap">
+              <div style="font-size:.85rem;color:#5b21b6"><i class="fas fa-wand-magic-sparkles"></i> <strong>Assistant prospection</strong> — idées de cibles selon la cuisine & la ville</div>
+              <button type="button" class="btn btn-sm" id="btnAiSuggest" style="background:#8b5cf6;color:#fff"><i class="fas fa-lightbulb"></i> Suggestions IA</button>
+            </div>
+            <div id="aiSuggestBox" style="margin-top:.6rem"></div>
+          </div>
           <div class="modal-footer">
             <button type="button" class="btn" onclick="document.getElementById('prospectModal').remove()">Annuler</button>
             <button type="submit" class="btn btn-primary">${isEdit ? 'Enregistrer' : 'Créer'}</button>
@@ -3605,6 +3615,34 @@ async function prospectModal(prospect, baseEndpoint) {
   document.body.insertAdjacentHTML('beforeend', html)
   if (prospect?.statut) document.getElementById('pStatut').value = prospect.statut
   if (prospect?.source) document.getElementById('pSource').value = prospect.source
+
+  const btnAi = document.getElementById('btnAiSuggest')
+  if (btnAi) btnAi.onclick = async () => {
+    const box = document.getElementById('aiSuggestBox')
+    const type_cuisine = document.getElementById('pCuisine').value
+    const ville = document.getElementById('pVille').value
+    const code_postal = document.getElementById('pCp').value
+    box.innerHTML = '<div class="spinner" style="margin:.5rem auto"></div>'
+    btnAi.disabled = true
+    try {
+      const { data } = await api.post('/admin/prospects/ai-suggest', { type_cuisine, ville, code_postal })
+      box.innerHTML = `
+        <div style="display:grid;gap:.5rem">
+          ${(data.suggestions || []).map(s => `
+            <div style="background:#fff;border:1px solid #e9d5ff;border-radius:6px;padding:.55rem .7rem">
+              <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:center">
+                <strong style="color:#6d28d9">${escapeHtml(s.type_etablissement)}</strong>
+                <span class="badge" style="background:#ede9fe;color:#6d28d9">Score ${s.score_potentiel}</span>
+              </div>
+              <div style="font-size:.8rem;color:#475569;margin:.3rem 0">${escapeHtml(s.argument)}</div>
+              <div style="font-size:.72rem;color:#94a3b8">${(s.sources_recherche || []).map(escapeHtml).join(' · ')}</div>
+            </div>`).join('')}
+          ${(data.conseils || []).length ? `<div style="font-size:.78rem;color:#92400e;background:#fef3c7;padding:.4rem .6rem;border-radius:4px"><i class="fas fa-info-circle"></i> ${data.conseils.map(escapeHtml).join('<br>')}</div>` : ''}
+        </div>`
+    } catch (err) {
+      box.innerHTML = `<div style="color:#991b1b;font-size:.82rem"><i class="fas fa-triangle-exclamation"></i> ${escapeHtml(err.message || 'Erreur suggestions')}</div>`
+    } finally { btnAi.disabled = false }
+  }
 
   document.getElementById('prospectForm').onsubmit = async e => {
     e.preventDefault()
@@ -3707,17 +3745,6 @@ async function prospectDetailModal(id, baseEndpoint) {
     navigate(CURRENT_PAGE)
   }
 }
-
-// --- IA Prospection : stand-by (feature désactivée) ---
-PAGES['prospect-ai'] = async (c) => {
-  c.innerHTML = `
-    <div class="page-header"><div>
-      <h1><i class="fas fa-pause-circle"></i> IA Prospection</h1>
-      <div class="subtitle">Fonctionnalité en stand-by</div>
-    </div></div>
-    <div class="card"><p class="text-muted">Cette section est temporairement mise en stand-by et sera réactivée prochainement.</p></div>`
-}
-PAGES['a-prospect-ai'] = PAGES['prospect-ai']
 
 // ============================================================
 // --- ATTRIBUTIONS (5e marque) ---
@@ -6089,509 +6116,6 @@ function adminRejeterDemandeModal(id) {
   }
 }
 
-// ============================================================
-// === CHALLENGES (admin + agent) =============================
-// ============================================================
-function challengeStatutBadge(s) {
-  const map = {
-    en_cours: { bg: '#3b82f6', label: 'EN COURS' },
-    reussi: { bg: '#10b981', label: 'RÉUSSI' },
-    recompense_attribuee: { bg: '#059669', label: 'RÉCOMPENSÉ' },
-    echoue: { bg: '#ef4444', label: 'ÉCHOUÉ' },
-    annule: { bg: '#9ca3af', label: 'ANNULÉ' }
-  }
-  const m = map[s] || { bg: '#6b7280', label: (s || '').toUpperCase() }
-  return `<span style="background:${m.bg};color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem;font-weight:600">${m.label}</span>`
-}
-function challengeTypeObjectifLabel(t) {
-  return ({ restaurants: 'Restaurants', marques: 'Marques', restaurants_ou_marques: 'Restos + Marques' })[t] || t
-}
-function challengeTypeRecompenseLabel(t) {
-  return ({
-    portefeuille_restaurants: 'Restaurants en portefeuille 100%',
-    portefeuille_marques: 'Marques en portefeuille 100%',
-    bonus_montant: 'Bonus financier (€)',
-    autre: 'Autre'
-  })[t] || t
-}
-
-// --- ADMIN : liste + CRUD ---
-PAGES['admin-challenges'] = async (c) => {
-  const { data } = await api.get('/challenges/admin')
-  const challenges = data.challenges || []
-  const today = new Date().toISOString().slice(0, 10)
-
-  c.innerHTML = `
-    <div class="page-header">
-      <div><h1><i class="fas fa-flag-checkered"></i> Challenges commerciaux</h1>
-        <div class="subtitle">Défis temporaires avec récompense (ex: 30 restos → 15 en portefeuille 100%)</div>
-      </div>
-      <div style="display:flex;gap:.5rem">
-        <button class="btn btn-secondary" id="syncAll" title="Recalculer toutes les progressions"><i class="fas fa-sync"></i> Synchroniser</button>
-        <button class="btn btn-primary" id="newChal"><i class="fas fa-plus"></i> Nouveau challenge</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title"><i class="fas fa-list"></i> ${challenges.length} challenge(s)</div>
-      <div class="table-wrap"><table class="data-table">
-        <thead><tr>
-          <th>Code</th><th>Nom</th><th>Période</th><th>Objectif</th>
-          <th class="text-right">Participants</th>
-          <th class="text-right">Réussis</th>
-          <th class="text-right">Récompensés</th>
-          <th>Suspend 5/5</th>
-          <th>Statut</th>
-          <th class="text-right">Actions</th>
-        </tr></thead>
-        <tbody>${challenges.length ? challenges.map(ch => {
-          const enPeriode = ch.date_debut <= today && today <= ch.date_fin
-          const aVenir = today < ch.date_debut
-          const termine = today > ch.date_fin
-          const statut = !ch.actif ? '<span style="background:#9ca3af;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">ARCHIVÉ</span>'
-            : aVenir ? '<span style="background:#6b7280;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">À VENIR</span>'
-            : enPeriode ? '<span style="background:#10b981;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">ACTIF</span>'
-            : '<span style="background:#f59e0b;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">TERMINÉ</span>'
-          return `<tr>
-            <td><strong style="font-family:monospace">${escapeHtml(ch.code)}</strong></td>
-            <td>
-              <strong>${escapeHtml(ch.nom)}</strong>
-              ${ch.description ? `<br><small class="text-muted">${escapeHtml(ch.description.substring(0, 80))}${ch.description.length > 80 ? '…' : ''}</small>` : ''}
-            </td>
-            <td><small>${fmtDate(ch.date_debut)}<br>→ ${fmtDate(ch.date_fin)}</small></td>
-            <td>
-              <strong>${ch.objectif_quantite}</strong> ${challengeTypeObjectifLabel(ch.type_objectif)}
-              <br><small class="text-muted">→ ${ch.recompense_quantite || ch.recompense_montant + '€'} ${challengeTypeRecompenseLabel(ch.type_recompense)}</small>
-            </td>
-            <td class="text-right">${ch.nb_participants || 0}</td>
-            <td class="text-right" style="color:#10b981"><strong>${ch.nb_reussis || 0}</strong></td>
-            <td class="text-right" style="color:#059669"><strong>${ch.nb_recompenses || 0}</strong></td>
-            <td>${ch.suspend_tranche_standard ? '<i class="fas fa-check" style="color:#10b981"></i>' : '—'}</td>
-            <td>${statut}</td>
-            <td class="text-right" style="white-space:nowrap">
-              <button class="btn btn-sm btn-secondary" data-view="${ch.id}" title="Détail"><i class="fas fa-eye"></i></button>
-              <button class="btn btn-sm btn-primary" data-edit="${ch.id}" title="Modifier"><i class="fas fa-pen"></i></button>
-              <button class="btn btn-sm btn-danger" data-del="${ch.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
-            </td>
-          </tr>`
-        }).join('') : '<tr><td colspan="10" class="text-center text-muted">Aucun challenge — cliquez sur "Nouveau challenge"</td></tr>'}</tbody>
-      </table></div>
-    </div>
-  `
-  document.getElementById('newChal').onclick = () => adminChallengeFormModal()
-  document.getElementById('syncAll').onclick = async () => {
-    try {
-      const { data } = await api.post('/challenges/admin/synchroniser')
-      toast(`${data.nb_synchronises} participation(s) recalculée(s)`)
-      navigate('admin-challenges')
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
-  }
-  c.querySelectorAll('[data-view]').forEach(b => b.onclick = () => adminChallengeDetailModal(b.dataset.view))
-  c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => adminChallengeFormModal(b.dataset.edit))
-  c.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
-    if (!confirm('Supprimer définitivement ce challenge ? Toutes les participations seront perdues.')) return
-    try {
-      await api.delete('/challenges/admin/' + b.dataset.del)
-      toast('Challenge supprimé')
-      navigate('admin-challenges')
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
-  })
-}
-
-async function adminChallengeFormModal(id) {
-  let ch = {
-    code: '', nom: '', description: '',
-    date_debut: '', date_fin: '',
-    type_objectif: 'restaurants', objectif_quantite: 30,
-    type_recompense: 'portefeuille_restaurants', recompense_quantite: 15,
-    recompense_montant: null, recompense_description: '',
-    suspend_tranche_standard: 1, cible: 'tous',
-    actif: 1, notes_internes: ''
-  }
-  if (id) {
-    const { data } = await api.get('/challenges/admin/' + id)
-    ch = data.challenge
-  }
-  // Pour cible="selection" : charger la liste des agents
-  let agentsHtml = ''
-  if (!id) {
-    try {
-      const { data } = await api.get('/admin/users')
-      const agents = (data.users || []).filter(u => u.role === 'agent' && u.actif)
-      agentsHtml = `<div class="form-group" id="grpSel" style="display:none">
-        <label>Participants (sélection)</label>
-        <select id="chSel" multiple size="6" style="width:100%">
-          ${agents.map(a => `<option value="${a.id}">${escapeHtml(a.prenom + ' ' + a.nom)} — ${escapeHtml(a.email)}</option>`).join('')}
-        </select>
-        <small class="text-muted">Maintenez Ctrl/Cmd pour sélectionner plusieurs agents</small>
-      </div>`
-    } catch {}
-  }
-
-  const m = modal((id ? '<i class="fas fa-pen"></i> Modifier' : '<i class="fas fa-plus"></i> Nouveau') + ' challenge', `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
-      <div class="form-group">
-        <label>Code <span class="req">*</span></label>
-        <input id="chCode" required placeholder="Ex: CH-2026-30R-SEBASTIAN" value="${escapeHtml(ch.code)}" ${id?'readonly':''}>
-        <small class="text-muted">Identifiant unique, non modifiable après création</small>
-      </div>
-      <div class="form-group">
-        <label>Nom <span class="req">*</span></label>
-        <input id="chNom" required placeholder="Ex: Challenge été 2026 — 30 restos = 15 portefeuille" value="${escapeHtml(ch.nom)}">
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Description</label>
-      <textarea id="chDesc" rows="2" placeholder="Détail des règles, conditions, motivations…">${escapeHtml(ch.description || '')}</textarea>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
-      <div class="form-group">
-        <label>Date début <span class="req">*</span></label>
-        <input type="date" id="chDeb" required value="${ch.date_debut || ''}">
-      </div>
-      <div class="form-group">
-        <label>Date fin <span class="req">*</span></label>
-        <input type="date" id="chFin" required value="${ch.date_fin || ''}">
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
-      <div class="form-group">
-        <label>Type d'objectif <span class="req">*</span></label>
-        <select id="chTO">
-          <option value="restaurants" ${ch.type_objectif==='restaurants'?'selected':''}>Restaurants apportés</option>
-          <option value="marques" ${ch.type_objectif==='marques'?'selected':''}>Marques créées</option>
-          <option value="restaurants_ou_marques" ${ch.type_objectif==='restaurants_ou_marques'?'selected':''}>Restaurants + Marques</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Quantité objectif <span class="req">*</span></label>
-        <input type="number" id="chOQ" min="1" required value="${ch.objectif_quantite}">
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
-      <div class="form-group">
-        <label>Type de récompense <span class="req">*</span></label>
-        <select id="chTR">
-          <option value="portefeuille_restaurants" ${ch.type_recompense==='portefeuille_restaurants'?'selected':''}>Restaurants en portefeuille 100%</option>
-          <option value="portefeuille_marques" ${ch.type_recompense==='portefeuille_marques'?'selected':''}>Marques en portefeuille 100%</option>
-          <option value="bonus_montant" ${ch.type_recompense==='bonus_montant'?'selected':''}>Bonus financier (€)</option>
-          <option value="autre" ${ch.type_recompense==='autre'?'selected':''}>Autre (texte libre)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Quantité / Montant</label>
-        <input type="number" id="chRQ" min="0" step="0.01" value="${ch.recompense_quantite || ch.recompense_montant || 15}">
-        <small class="text-muted">Nombre d'éléments à attribuer OU montant en €</small>
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Description récompense (si "Autre")</label>
-      <input id="chRD" placeholder="Ex: Voyage, formation, équipement…" value="${escapeHtml(ch.recompense_description || '')}">
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
-      <div class="form-group">
-        <label>
-          <input type="checkbox" id="chSus" ${ch.suspend_tranche_standard?'checked':''}>
-          Suspendre la règle 5/5 pour les participants
-        </label>
-        <small class="text-muted">Pendant la période du challenge, les participants ne déclenchent pas la règle standard de la 5e marque/resto</small>
-      </div>
-      <div class="form-group">
-        <label>Cible <span class="req">*</span></label>
-        <select id="chCible">
-          <option value="tous" ${ch.cible==='tous'?'selected':''}>Tous les agents actifs (auto-inscription)</option>
-          <option value="selection" ${ch.cible==='selection'?'selected':''}>Sélection manuelle</option>
-        </select>
-      </div>
-    </div>
-    ${agentsHtml}
-    <div class="form-group">
-      <label>Notes internes (superadmin)</label>
-      <textarea id="chNot" rows="2">${escapeHtml(ch.notes_internes || '')}</textarea>
-    </div>
-    ${id ? `<div class="form-group">
-      <label><input type="checkbox" id="chAct" ${ch.actif?'checked':''}> Actif (visible)</label>
-    </div>` : ''}
-    <div class="form-actions">
-      <button type="button" class="btn btn-secondary" data-close>Annuler</button>
-      <button type="button" class="btn btn-primary" id="chOk"><i class="fas fa-check"></i> ${id ? 'Mettre à jour' : 'Créer'}</button>
-    </div>
-  `)
-  m.el.querySelector('[data-close]').onclick = () => m.close()
-  const cibleSel = m.el.querySelector('#chCible')
-  const grpSel = m.el.querySelector('#grpSel')
-  if (cibleSel && grpSel) {
-    const upd = () => grpSel.style.display = cibleSel.value === 'selection' ? '' : 'none'
-    cibleSel.onchange = upd; upd()
-  }
-  m.el.querySelector('#chOk').onclick = async () => {
-    const typeRecompense = m.el.querySelector('#chTR').value
-    const recQty = parseFloat(m.el.querySelector('#chRQ').value) || 0
-    const payload = {
-      code: m.el.querySelector('#chCode').value.trim(),
-      nom: m.el.querySelector('#chNom').value.trim(),
-      description: m.el.querySelector('#chDesc').value.trim() || null,
-      date_debut: m.el.querySelector('#chDeb').value,
-      date_fin: m.el.querySelector('#chFin').value,
-      type_objectif: m.el.querySelector('#chTO').value,
-      objectif_quantite: parseInt(m.el.querySelector('#chOQ').value),
-      type_recompense: typeRecompense,
-      recompense_quantite: typeRecompense === 'bonus_montant' ? null : Math.floor(recQty),
-      recompense_montant: typeRecompense === 'bonus_montant' ? recQty : null,
-      recompense_description: m.el.querySelector('#chRD').value.trim() || null,
-      suspend_tranche_standard: m.el.querySelector('#chSus').checked ? 1 : 0,
-      cible: m.el.querySelector('#chCible').value,
-      notes_internes: m.el.querySelector('#chNot').value.trim() || null
-    }
-    if (id) payload.actif = m.el.querySelector('#chAct').checked ? 1 : 0
-    if (!id && payload.cible === 'selection') {
-      const sel = m.el.querySelector('#chSel')
-      payload.participants_ids = sel ? Array.from(sel.selectedOptions).map(o => parseInt(o.value)) : []
-    }
-    try {
-      if (id) {
-        await api.put('/challenges/admin/' + id, payload)
-        toast('Challenge mis à jour')
-      } else {
-        const { data } = await api.post('/challenges/admin', payload)
-        toast(`Challenge créé — ${data.nb_inscrits} agent(s) inscrits`)
-      }
-      m.close()
-      navigate('admin-challenges')
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
-  }
-}
-
-async function adminChallengeDetailModal(id) {
-  const { data } = await api.get('/challenges/admin/' + id)
-  const ch = data.challenge
-  const parts = data.participations || []
-  const m = modal('<i class="fas fa-flag-checkered"></i> ' + escapeHtml(ch.nom) + ' — <code>' + escapeHtml(ch.code) + '</code>', `
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.8rem;margin-bottom:1rem">
-      <div class="stat-card primary"><div class="stat-label">Période</div><div class="stat-value" style="font-size:.95rem">${fmtDate(ch.date_debut)} → ${fmtDate(ch.date_fin)}</div></div>
-      <div class="stat-card accent"><div class="stat-label">Objectif</div><div class="stat-value">${ch.objectif_quantite}</div><div class="stat-extra">${challengeTypeObjectifLabel(ch.type_objectif)}</div></div>
-      <div class="stat-card success"><div class="stat-label">Récompense</div><div class="stat-value">${ch.recompense_quantite || ch.recompense_montant + '€'}</div><div class="stat-extra">${challengeTypeRecompenseLabel(ch.type_recompense)}</div></div>
-    </div>
-    ${ch.description ? `<div class="card" style="background:#f9fafb;margin-bottom:.8rem"><small>${escapeHtml(ch.description)}</small></div>` : ''}
-    ${ch.suspend_tranche_standard ? `<div class="card" style="background:#fef3c7;border-left:3px solid #f59e0b;margin-bottom:.8rem"><small><i class="fas fa-exclamation-triangle"></i> <strong>Règle 5/5 suspendue</strong> pour les participants pendant la période.</small></div>` : ''}
-    <h3 style="margin:.6rem 0 .4rem">Participants (${parts.length})</h3>
-    <div class="table-wrap" style="max-height:400px;overflow:auto"><table class="data-table">
-      <thead><tr>
-        <th>Agent</th>
-        <th class="text-right">Progression</th>
-        <th>Statut</th>
-        <th>Réussi le</th>
-        <th class="text-right">Actions</th>
-      </tr></thead>
-      <tbody>${parts.length ? parts.map(p => {
-        const pct = Math.min(100, Math.round((p.progression_actuelle / ch.objectif_quantite) * 100))
-        const color = pct >= 100 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#3b82f6'
-        return `<tr>
-          <td>
-            <strong>${escapeHtml((p.prenom || '') + ' ' + (p.nom || ''))}</strong>
-            <br><small class="text-muted">${escapeHtml(p.email || '')}</small>
-          </td>
-          <td class="text-right">
-            <strong>${p.progression_actuelle} / ${ch.objectif_quantite}</strong>
-            <div style="background:#e5e7eb;border-radius:99px;height:6px;margin-top:.3rem;overflow:hidden">
-              <div style="background:${color};height:100%;width:${pct}%"></div>
-            </div>
-          </td>
-          <td>${challengeStatutBadge(p.statut)}</td>
-          <td><small>${p.date_reussite ? fmtDateTime(p.date_reussite) : '—'}</small></td>
-          <td class="text-right" style="white-space:nowrap">
-            ${p.statut === 'reussi' ? `<button class="btn btn-sm btn-success" data-rec="${p.id}" title="Attribuer la récompense"><i class="fas fa-gift"></i> Récompenser</button>` : ''}
-            ${p.statut === 'recompense_attribuee' ? '<span style="color:#059669"><i class="fas fa-check-double"></i></span>' : ''}
-            <button class="btn btn-sm btn-danger" data-del-p="${p.id}" title="Retirer"><i class="fas fa-times"></i></button>
-          </td>
-        </tr>`
-      }).join('') : '<tr><td colspan="5" class="text-center text-muted">Aucun participant</td></tr>'}</tbody>
-    </table></div>
-    <div class="form-actions">
-      <button type="button" class="btn btn-secondary" data-close>Fermer</button>
-    </div>
-  `)
-  m.el.querySelector('[data-close]').onclick = () => m.close()
-  m.el.querySelectorAll('[data-rec]').forEach(b => b.onclick = async () => {
-    const notes = prompt('Notes facultatives (ex: "15 premiers restos auto-attribués") :') || ''
-    if (notes === null) return
-    try {
-      const { data } = await api.post('/challenges/admin/participations/' + b.dataset.rec + '/recompenser', { notes })
-      toast(`Récompense attribuée — ${data.nb_attribue} élément(s) marqué(s) en portefeuille`)
-      m.close()
-      adminChallengeDetailModal(id)
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
-  })
-  m.el.querySelectorAll('[data-del-p]').forEach(b => b.onclick = async () => {
-    if (!confirm('Retirer ce participant ?')) return
-    try {
-      await api.delete('/challenges/admin/' + id + '/participations/' + b.dataset.delP)
-      toast('Participant retiré')
-      m.close()
-      adminChallengeDetailModal(id)
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
-  })
-}
-
-// --- AGENT : mes challenges ---
-PAGES['a-challenges'] = async (c) => {
-  const { data } = await api.get('/challenges/mine')
-  const list = data.challenges || []
-
-  c.innerHTML = `
-    <div class="page-header">
-      <div><h1><i class="fas fa-flag-checkered"></i> Mes challenges</h1>
-        <div class="subtitle">Défis en cours — apportez des restaurants/marques pour débloquer des récompenses</div>
-      </div>
-    </div>
-
-    ${list.length === 0 ? `
-      <div class="card" style="text-align:center;padding:2.5rem">
-        <i class="fas fa-flag-checkered" style="font-size:3rem;color:#cbd5e1;margin-bottom:1rem"></i>
-        <h3>Aucun challenge en cours</h3>
-        <p class="text-muted">Le superadmin n'a pas encore lancé de challenge auquel vous participez.</p>
-      </div>
-    ` : `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:1rem">
-        ${list.map(ch => {
-          const p = ch.participation
-          const prog = p ? p.progression_actuelle : 0
-          const pct = Math.min(100, Math.round((prog / ch.objectif_quantite) * 100))
-          const reste = Math.max(0, ch.objectif_quantite - prog)
-          const today = new Date().toISOString().slice(0,10)
-          const aVenir = today < ch.date_debut
-          const enCours = today >= ch.date_debut && today <= ch.date_fin
-          const finJ = Math.ceil((new Date(ch.date_fin) - new Date()) / (1000*60*60*24))
-          const couleur = pct >= 100 ? '#10b981' : pct >= 66 ? '#3b82f6' : pct >= 33 ? '#f59e0b' : '#6b7280'
-          return `<div class="card" style="border-left:4px solid ${couleur}">
-            <div style="display:flex;justify-content:space-between;align-items:start;gap:.5rem">
-              <div>
-                <div style="font-family:monospace;font-size:.75rem;color:#6b7280">${escapeHtml(ch.code)}</div>
-                <h3 style="margin:.3rem 0">${escapeHtml(ch.nom)}</h3>
-              </div>
-              ${p ? challengeStatutBadge(p.statut) : '<span style="background:#9ca3af;color:#fff;padding:.18rem .5rem;border-radius:4px;font-size:.7rem">NON INSCRIT</span>'}
-            </div>
-            ${ch.description ? `<p style="color:#6b7280;font-size:.85rem;margin:.5rem 0">${escapeHtml(ch.description)}</p>` : ''}
-            <div style="background:#f9fafb;border-radius:6px;padding:.7rem;margin:.8rem 0">
-              <div style="display:flex;justify-content:space-between;margin-bottom:.3rem">
-                <strong>Progression</strong>
-                <strong style="color:${couleur}">${prog} / ${ch.objectif_quantite}</strong>
-              </div>
-              <div style="background:#e5e7eb;border-radius:99px;height:10px;overflow:hidden">
-                <div style="background:${couleur};height:100%;width:${pct}%;transition:width .3s"></div>
-              </div>
-              <div style="display:flex;justify-content:space-between;margin-top:.4rem;font-size:.78rem;color:#6b7280">
-                <span>${pct}%</span>
-                <span>${reste > 0 ? `Reste ${reste} à apporter` : 'Objectif atteint ✓'}</span>
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;font-size:.82rem">
-              <div><i class="fas fa-calendar-alt"></i> <strong>Période</strong><br>${fmtDate(ch.date_debut)} → ${fmtDate(ch.date_fin)}</div>
-              <div>
-                <i class="fas fa-bullseye"></i> <strong>Objectif</strong><br>
-                ${ch.objectif_quantite} ${challengeTypeObjectifLabel(ch.type_objectif).toLowerCase()}
-              </div>
-              <div><i class="fas fa-gift"></i> <strong>Récompense</strong><br>${ch.recompense_quantite ? ch.recompense_quantite + ' ' : ''}${ch.recompense_montant ? fmtEUR(ch.recompense_montant) + ' ' : ''}${challengeTypeRecompenseLabel(ch.type_recompense)}</div>
-              <div>
-                <i class="fas fa-clock"></i> <strong>Statut période</strong><br>
-                ${aVenir ? '<span style="color:#6b7280">Démarre dans ' + Math.ceil((new Date(ch.date_debut) - new Date()) / (1000*60*60*24)) + ' j</span>'
-                  : enCours ? `<span style="color:#10b981"><strong>${finJ} j restant${finJ>1?'s':''}</strong></span>`
-                  : '<span style="color:#ef4444">Terminé</span>'}
-              </div>
-            </div>
-            ${ch.suspend_tranche_standard ? `<div style="background:#fef3c7;border-left:3px solid #f59e0b;padding:.5rem .7rem;margin-top:.6rem;font-size:.78rem;border-radius:4px">
-              <i class="fas fa-info-circle"></i> Pendant ce challenge, la règle standard 5/5 (5e marque/resto = portefeuille) est <strong>suspendue</strong>.
-            </div>` : ''}
-            ${p && p.statut === 'reussi' ? `<div style="background:#d1fae5;border:1px solid #10b981;padding:.6rem;margin-top:.6rem;border-radius:6px;text-align:center">
-              <i class="fas fa-trophy" style="color:#059669"></i> <strong>Objectif atteint le ${fmtDateTime(p.date_reussite)}</strong> — en attente d'attribution par le superadmin.
-            </div>` : ''}
-            ${p && p.statut === 'recompense_attribuee' ? `<div style="background:#d1fae5;border:1px solid #10b981;padding:.6rem;margin-top:.6rem;border-radius:6px;text-align:center">
-              <i class="fas fa-check-double" style="color:#059669"></i> <strong>Récompense attribuée</strong> ${p.recompense_notes ? '— ' + escapeHtml(p.recompense_notes) : ''}
-            </div>` : ''}
-            <div style="margin-top:.8rem;display:flex;gap:.4rem">
-              <button class="btn btn-sm btn-secondary" data-detail="${ch.id}"><i class="fas fa-eye"></i> Détail</button>
-              ${!p && ch.cible === 'tous' ? `<button class="btn btn-sm btn-primary" data-inscrire="${ch.id}"><i class="fas fa-flag"></i> Participer</button>` : ''}
-              ${p ? `<button class="btn btn-sm btn-secondary" data-sync="${ch.id}"><i class="fas fa-sync"></i> Recalculer</button>` : ''}
-            </div>
-          </div>`
-        }).join('')}
-      </div>
-    `}
-  `
-
-  c.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => agentChallengeDetailModal(b.dataset.detail))
-  c.querySelectorAll('[data-inscrire]').forEach(b => b.onclick = async () => {
-    try {
-      await api.post('/challenges/' + b.dataset.inscrire + '/participer')
-      toast('Inscription confirmée')
-      navigate('a-challenges')
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
-  })
-  c.querySelectorAll('[data-sync]').forEach(b => b.onclick = async () => {
-    try {
-      const { data } = await api.post('/challenges/' + b.dataset.sync + '/synchroniser')
-      toast(`Progression recalculée : ${data.progression}${data.objectif_atteint ? ' — Objectif atteint !' : ''}`)
-      navigate('a-challenges')
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
-  })
-}
-
-async function agentChallengeDetailModal(id) {
-  const { data } = await api.get('/challenges/mine/' + id)
-  const ch = data.challenge
-  const p = data.participation
-  const restos = data.restos || []
-  const marques = data.marques || []
-  const pct = p ? Math.min(100, Math.round((p.progression_actuelle / ch.objectif_quantite) * 100)) : 0
-
-  const m = modal('<i class="fas fa-flag-checkered"></i> ' + escapeHtml(ch.nom), `
-    <div class="card" style="background:#f9fafb;margin-bottom:.8rem">
-      <div style="font-family:monospace;font-size:.78rem;color:#6b7280">${escapeHtml(ch.code)}</div>
-      ${ch.description ? `<p style="margin:.4rem 0 0">${escapeHtml(ch.description)}</p>` : ''}
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:1rem">
-      <div class="stat-card primary"><div class="stat-label">Période</div><div style="font-size:.85rem;margin-top:.3rem"><strong>${fmtDate(ch.date_debut)}</strong><br>→ ${fmtDate(ch.date_fin)}</div></div>
-      <div class="stat-card accent"><div class="stat-label">Objectif</div><div class="stat-value">${ch.objectif_quantite}</div><div class="stat-extra">${challengeTypeObjectifLabel(ch.type_objectif)}</div></div>
-      <div class="stat-card success"><div class="stat-label">Récompense</div><div class="stat-value">${ch.recompense_quantite || (ch.recompense_montant ? fmtEUR(ch.recompense_montant) : '—')}</div><div class="stat-extra">${challengeTypeRecompenseLabel(ch.type_recompense)}</div></div>
-    </div>
-    ${p ? `<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin-bottom:1rem">
-      <div style="display:flex;justify-content:space-between;margin-bottom:.4rem">
-        <strong>Ma progression</strong>
-        <strong>${p.progression_actuelle} / ${ch.objectif_quantite} (${pct}%)</strong>
-      </div>
-      <div style="background:#e5e7eb;border-radius:99px;height:12px;overflow:hidden">
-        <div style="background:${pct>=100?'#10b981':'#3b82f6'};height:100%;width:${pct}%"></div>
-      </div>
-      <div style="margin-top:.6rem">${challengeStatutBadge(p.statut)}</div>
-    </div>` : ''}
-    ${restos.length ? `<h3 style="margin:.6rem 0 .4rem">Restaurants comptabilisés (${restos.length})</h3>
-      <div class="table-wrap" style="max-height:200px;overflow:auto;margin-bottom:.8rem"><table class="data-table">
-        <thead><tr><th>Nom</th><th>Ville</th><th>Signature</th><th>Portefeuille ?</th></tr></thead>
-        <tbody>${restos.map(r => `<tr>
-          <td><strong>${escapeHtml(r.nom)}</strong></td>
-          <td>${escapeHtml(r.ville || '')}</td>
-          <td><small>${fmtDate(r.date_signature)}</small></td>
-          <td>${r.is_portefeuille_proprietaire ? '<i class="fas fa-star" style="color:#f59e0b"></i>' : '—'}</td>
-        </tr>`).join('')}</tbody>
-      </table></div>` : ''}
-    ${marques.length ? `<h3 style="margin:.6rem 0 .4rem">Marques comptabilisées (${marques.length})</h3>
-      <div class="table-wrap" style="max-height:200px;overflow:auto;margin-bottom:.8rem"><table class="data-table">
-        <thead><tr><th>Marque</th><th>Restaurant</th><th>Création</th><th>Portefeuille ?</th></tr></thead>
-        <tbody>${marques.map(mq => `<tr>
-          <td><strong>${escapeHtml(mq.nom)}</strong></td>
-          <td>${escapeHtml(mq.restaurant_nom || '')}</td>
-          <td><small>${fmtDate(mq.created_at)}</small></td>
-          <td>${mq.is_portefeuille_proprietaire ? '<i class="fas fa-star" style="color:#f59e0b"></i>' : '—'}</td>
-        </tr>`).join('')}</tbody>
-      </table></div>` : ''}
-    <div class="form-actions">
-      <button type="button" class="btn btn-secondary" data-close>Fermer</button>
-    </div>
-  `)
-  m.el.querySelector('[data-close]').onclick = () => m.close()
-}
-
-// --- Sous-agents ---
 PAGES['a-sous-agents'] = async (c) => {
   const [sa, inv] = await Promise.all([
     api.get('/agent/sous-agents'),
