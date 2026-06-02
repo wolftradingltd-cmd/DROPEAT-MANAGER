@@ -267,8 +267,7 @@ function renderLogin() {
 const ADMIN_NAV = [
   { section: 'GESTION' },
   { id: 'dashboard', label: 'Tableau de bord', icon: 'fa-chart-pie' },
-  { id: 'users', label: 'Utilisateurs', icon: 'fa-users-gear' },
-  { id: 'admin-agents-crud', label: 'Agents (CRUD omnipotent)', icon: 'fa-user-shield' },
+  { id: 'gestion-utilisateurs', label: 'Utilisateurs & Agents', icon: 'fa-users-gear' },
   { id: 'agents', label: 'Agents (Drill-down)', icon: 'fa-user-tie' },
   { id: 'tree', label: 'Arborescence MLM', icon: 'fa-sitemap' },
   { id: 'mlm', label: 'CA filleuls & sous-filleuls', icon: 'fa-network-wired' },
@@ -518,137 +517,344 @@ PAGES['dashboard'] = async (c) => {
   if (lk2) lk2.onclick = () => navigate('attributions')
 }
 
-// --- Utilisateurs ---
-PAGES['users'] = async (c) => {
-  const { data } = await api.get('/admin/users')
+// ============================================================
+// === GESTION UTILISATEURS & AGENTS (page unifiée) ===========
+// ============================================================
+PAGES['gestion-utilisateurs'] = async (c) => {
+  const [{ data: dataUsers }, { data: dataAgents }] = await Promise.all([
+    api.get('/admin/users'),
+    api.get('/admin/agents-crud')
+  ])
+  const allUsers = dataUsers.users || []
+  const allAgents = dataAgents.agents || []
+  const superadmins = allUsers.filter(u => u.role === 'superadmin')
+  const agents = allAgents
+
+  const nbActifs = agents.filter(a => a.actif).length
+  const nbInactifs = agents.filter(a => !a.actif).length
+
   c.innerHTML = `
     <div class="page-header">
-      <div><h1>Utilisateurs</h1><div class="subtitle">Superadmins, agents commerciaux et sous-agents</div></div>
-      <button class="btn btn-primary" id="btnNewUser"><i class="fas fa-plus"></i> Nouvel utilisateur</button>
+      <div>
+        <h1><i class="fas fa-users-gear"></i> Utilisateurs &amp; Agents</h1>
+        <div class="subtitle">Superadmins, agents commerciaux et sous-agents — gestion centralisée</div>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-secondary" id="btnNewAdmin"><i class="fas fa-shield-halved"></i> Nouveau superadmin</button>
+        <button class="btn btn-primary" id="btnNewAgent"><i class="fas fa-user-plus"></i> Nouvel agent</button>
+      </div>
     </div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead><tr>
-          <th>Nom</th><th>Email</th><th>Rôle / Niveau</th><th>Parent</th>
-          <th class="text-right">Restos</th><th class="text-right">Sous-agents</th>
-          <th>Statut</th><th>Dernière connexion</th><th class="text-right">Actions</th>
-        </tr></thead>
-        <tbody>${data.users.map(u => `
-          <tr>
-            <td><strong>${escapeHtml(u.prenom)} ${escapeHtml(u.nom)}</strong></td>
-            <td>${escapeHtml(u.email)}</td>
-            <td>${u.role === 'superadmin' ? '<span class="niveau-pill niveau-admin">Superadmin</span>' : niveauPill(u.niveau)}</td>
-            <td>${u.parent_nom ? escapeHtml(u.parent_prenom + ' ' + u.parent_nom) : '<span class="text-muted">—</span>'}</td>
-            <td class="text-right">${u.nb_restaurants}</td>
-            <td class="text-right">${u.nb_sous_agents}</td>
-            <td>${u.actif ? '<span class="badge badge-primary">Actif</span>' : '<span class="badge badge-danger">Inactif</span>'}</td>
-            <td>${fmtDateTime(u.derniere_connexion)}</td>
-            <td class="text-right">
-              <button class="btn btn-sm btn-secondary" data-edit="${u.id}"><i class="fas fa-pen"></i></button>
-              <button class="btn btn-sm btn-secondary" data-pwd="${u.id}"><i class="fas fa-key"></i></button>
-              <button class="btn btn-sm btn-danger" data-del="${u.id}"><i class="fas fa-trash"></i></button>
-            </td>
-          </tr>`).join('')}</tbody>
-      </table>
-    </div>`
-  document.getElementById('btnNewUser').onclick = () => userModal(null, data.users)
-  c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => userModal(parseInt(b.dataset.edit), data.users))
-  c.querySelectorAll('[data-pwd]').forEach(b => b.onclick = () => resetPasswordModal(parseInt(b.dataset.pwd)))
-  c.querySelectorAll('[data-del]').forEach(b => b.onclick = () => confirmDialog(
-    'Supprimer définitivement cet utilisateur ? Ses restaurants seront détachés.',
-    async () => { await api.delete('/admin/users/' + b.dataset.del); toast('Supprimé'); navigate('users') }
-  ))
+
+    <div class="stats-grid" style="margin-bottom:1.25rem">
+      <div class="stat-card"><div class="stat-label">Superadmins</div><div class="stat-value">${superadmins.length}</div></div>
+      <div class="stat-card"><div class="stat-label">Agents totaux</div><div class="stat-value">${agents.length}</div></div>
+      <div class="stat-card"><div class="stat-label">Agents actifs</div><div class="stat-value" style="color:var(--success)">${nbActifs}</div></div>
+      <div class="stat-card"><div class="stat-label">Agents inactifs</div><div class="stat-value" style="color:var(--danger)">${nbInactifs}</div></div>
+    </div>
+
+    <!-- Onglets internes -->
+    <div class="gu-tabs" style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:1.25rem">
+      <button class="gu-tab active" data-tab="agents" style="padding:.6rem 1.4rem;border:none;background:none;cursor:pointer;font-weight:600;color:var(--primary);border-bottom:2px solid var(--primary);margin-bottom:-2px">
+        <i class="fas fa-user-tie"></i> Agents (${agents.length})
+      </button>
+      <button class="gu-tab" data-tab="superadmins" style="padding:.6rem 1.4rem;border:none;background:none;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;margin-bottom:-2px">
+        <i class="fas fa-shield-halved"></i> Superadmins (${superadmins.length})
+      </button>
+    </div>
+
+    <!-- Panneau Agents -->
+    <div class="gu-pane" id="pane-agents">
+      <!-- Filtres -->
+      <div style="display:flex;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
+        <input id="filterAgentSearch" placeholder="🔍 Nom, email, téléphone…" style="flex:1;min-width:220px;padding:.45rem .75rem;border:1px solid var(--border);border-radius:6px;font-size:.88rem"/>
+        <select id="filterAgentNiveau" style="padding:.45rem .75rem;border:1px solid var(--border);border-radius:6px;font-size:.88rem">
+          <option value="">Tous les niveaux</option>
+          <option value="0">N0 — Agent racine</option>
+          <option value="1">N1 — Sous-agent</option>
+          <option value="2">N2 — Sous-agent</option>
+          <option value="3">N3</option><option value="4">N4</option><option value="5">N5</option>
+        </select>
+        <select id="filterAgentStatut" style="padding:.45rem .75rem;border:1px solid var(--border);border-radius:6px;font-size:.88rem">
+          <option value="">Tous les statuts</option>
+          <option value="1">Actifs seulement</option>
+          <option value="0">Inactifs seulement</option>
+        </select>
+        <span id="filterAgentCount" style="font-size:.82rem;color:var(--text-muted)"></span>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table" id="tableAgents">
+          <thead><tr>
+            <th>Nom</th><th>Email</th><th>Niveau</th><th>Parent</th>
+            <th class="text-right">Filleuls</th><th class="text-right">Restos</th>
+            <th>Statut</th><th>Dernière connexion</th><th class="text-right">Actions</th>
+          </tr></thead>
+          <tbody id="tbodyAgents">${agents.map(a => `
+            <tr data-nom="${escapeHtml((a.prenom+' '+a.nom).toLowerCase())}" data-email="${escapeHtml((a.email||'').toLowerCase())}" data-tel="${escapeHtml((a.telephone||'').toLowerCase())}" data-niveau="${a.niveau}" data-actif="${a.actif ? '1' : '0'}">
+              <td><strong>${escapeHtml(a.prenom + ' ' + a.nom)}</strong></td>
+              <td style="font-size:.85rem">${escapeHtml(a.email)}</td>
+              <td>${niveauPill(a.niveau)}</td>
+              <td>${a.parent_nom ? escapeHtml(a.parent_nom) : '<span class="text-muted">—</span>'}</td>
+              <td class="text-right">${a.nb_enfants_directs}</td>
+              <td class="text-right">${a.nb_restos}</td>
+              <td>${a.actif ? '<span class="badge badge-primary">Actif</span>' : '<span class="badge badge-danger">Inactif</span>'}</td>
+              <td style="font-size:.85rem">${fmtDateTime(a.derniere_connexion)}</td>
+              <td class="text-right" style="white-space:nowrap">
+                <button class="btn btn-sm btn-secondary" data-agent-edit="${a.id}" title="Modifier"><i class="fas fa-pen"></i></button>
+                <button class="btn btn-sm ${a.actif ? 'btn-warning' : 'btn-success'}" data-agent-toggle="${a.id}" data-actif="${a.actif ? '1' : '0'}" title="${a.actif ? 'Désactiver' : 'Activer'}"><i class="fas fa-${a.actif ? 'pause' : 'play'}"></i></button>
+                <button class="btn btn-sm btn-info" data-agent-pwd="${a.id}" title="Reset mot de passe"><i class="fas fa-key"></i></button>
+                <button class="btn btn-sm btn-secondary" data-agent-drill="${a.id}" title="Voir détail drill-down"><i class="fas fa-eye"></i></button>
+                <button class="btn btn-sm btn-danger" data-agent-del="${a.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Panneau Superadmins -->
+    <div class="gu-pane" id="pane-superadmins" style="display:none">
+      <div class="card" style="background:#eff6ff;border-left:3px solid #3b82f6;margin-bottom:1rem;padding:.75rem 1rem;font-size:.88rem">
+        <i class="fas fa-circle-info" style="color:#3b82f6"></i>
+        Les superadmins ont accès à l'intégralité du dashboard. Ils ne font pas partie de la hiérarchie MLM et n'ont pas de restaurants associés.
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr>
+            <th>Nom</th><th>Email</th><th>Téléphone</th><th>Statut</th><th>Dernière connexion</th><th>Créé le</th><th class="text-right">Actions</th>
+          </tr></thead>
+          <tbody>${superadmins.map(u => `
+            <tr>
+              <td><strong>${escapeHtml(u.prenom + ' ' + u.nom)}</strong></td>
+              <td>${escapeHtml(u.email)}</td>
+              <td>${escapeHtml(u.telephone || '—')}</td>
+              <td>${u.actif ? '<span class="badge badge-primary">Actif</span>' : '<span class="badge badge-danger">Inactif</span>'}</td>
+              <td>${fmtDateTime(u.derniere_connexion)}</td>
+              <td>${fmtDate(u.created_at)}</td>
+              <td class="text-right" style="white-space:nowrap">
+                <button class="btn btn-sm btn-secondary" data-admin-edit="${u.id}" title="Modifier"><i class="fas fa-pen"></i></button>
+                <button class="btn btn-sm btn-info" data-admin-pwd="${u.id}" title="Reset mot de passe"><i class="fas fa-key"></i></button>
+                <button class="btn btn-sm btn-danger" data-admin-del="${u.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `
+
+  // === Onglets internes ===
+  c.querySelectorAll('.gu-tab').forEach(tab => {
+    tab.onclick = () => {
+      c.querySelectorAll('.gu-tab').forEach(t => {
+        t.style.color = 'var(--text-muted)'; t.style.borderBottomColor = 'transparent'; t.classList.remove('active')
+      })
+      c.querySelectorAll('.gu-pane').forEach(p => p.style.display = 'none')
+      tab.style.color = 'var(--primary)'; tab.style.borderBottomColor = 'var(--primary)'; tab.classList.add('active')
+      document.getElementById('pane-' + tab.dataset.tab).style.display = ''
+    }
+  })
+
+  // === Filtres agents ===
+  const filterAgents = () => {
+    const search = document.getElementById('filterAgentSearch').value.toLowerCase().trim()
+    const niveau = document.getElementById('filterAgentNiveau').value
+    const statut = document.getElementById('filterAgentStatut').value
+    let visible = 0
+    c.querySelectorAll('#tbodyAgents tr').forEach(tr => {
+      const matchSearch = !search || tr.dataset.nom.includes(search) || tr.dataset.email.includes(search) || tr.dataset.tel.includes(search)
+      const matchNiveau = !niveau || tr.dataset.niveau === niveau
+      const matchStatut = !statut || tr.dataset.actif === statut
+      const show = matchSearch && matchNiveau && matchStatut
+      tr.style.display = show ? '' : 'none'
+      if (show) visible++
+    })
+    document.getElementById('filterAgentCount').textContent = visible + ' agent(s) affiché(s)'
+  }
+  document.getElementById('filterAgentSearch').oninput = filterAgents
+  document.getElementById('filterAgentNiveau').onchange = filterAgents
+  document.getElementById('filterAgentStatut').onchange = filterAgents
+  filterAgents()
+
+  // === Boutons création ===
+  document.getElementById('btnNewAgent').onclick = () => unifiedAgentModal(null, allUsers, () => navigate('gestion-utilisateurs'))
+  document.getElementById('btnNewAdmin').onclick = () => unifiedSuperadminModal(null, () => navigate('gestion-utilisateurs'))
+
+  // === Actions agents ===
+  c.querySelectorAll('[data-agent-edit]').forEach(b => {
+    const a = agents.find(x => x.id == b.dataset.agentEdit)
+    b.onclick = () => unifiedAgentModal(a, allUsers, () => navigate('gestion-utilisateurs'))
+  })
+  c.querySelectorAll('[data-agent-toggle]').forEach(b => {
+    b.onclick = () => {
+      const id = b.dataset.agentToggle, actif = b.dataset.actif === '1'
+      const url = actif ? '/admin/agents-crud/' + id + '/desactiver' : '/admin/agents-crud/' + id + '/activer'
+      confirmDialog(actif ? 'Désactiver cet agent ? Toutes ses sessions seront fermées.' : 'Activer cet agent ?',
+        async () => { await api.put(url); toast('Statut mis à jour'); navigate('gestion-utilisateurs') })
+    }
+  })
+  c.querySelectorAll('[data-agent-pwd]').forEach(b => {
+    b.onclick = () => resetPasswordModal(b.dataset.agentPwd, 'agent')
+  })
+  c.querySelectorAll('[data-agent-drill]').forEach(b => {
+    b.onclick = () => navigate('agent-detail-' + b.dataset.agentDrill)
+  })
+  c.querySelectorAll('[data-agent-del]').forEach(b => {
+    b.onclick = () => confirmDialog('Supprimer définitivement cet agent ? (Refusé s\'il a des filleuls ou restaurants associés)',
+      async () => {
+        try { await api.delete('/admin/agents-crud/' + b.dataset.agentDel); toast('Agent supprimé'); navigate('gestion-utilisateurs') }
+        catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+      })
+  })
+
+  // === Actions superadmins ===
+  c.querySelectorAll('[data-admin-edit]').forEach(b => {
+    const u = allUsers.find(x => x.id == b.dataset.adminEdit)
+    b.onclick = () => unifiedSuperadminModal(u, () => navigate('gestion-utilisateurs'))
+  })
+  c.querySelectorAll('[data-admin-pwd]').forEach(b => {
+    b.onclick = () => resetPasswordModal(b.dataset.adminPwd, 'superadmin')
+  })
+  c.querySelectorAll('[data-admin-del]').forEach(b => {
+    b.onclick = () => confirmDialog('Supprimer définitivement ce superadmin ? (Impossible s\'il est le dernier.)',
+      async () => {
+        try { await api.delete('/admin/users/' + b.dataset.adminDel); toast('Superadmin supprimé'); navigate('gestion-utilisateurs') }
+        catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+      })
+  })
 }
 
-function userModal(id, allUsers) {
-  const isEdit = !!id
-  const u = isEdit ? allUsers.find(x => x.id === id) : null
-  const parentOptions = ['<option value="">— Aucun (agent racine) —</option>']
-    .concat(allUsers.filter(x => x.role === 'agent' && x.id !== id).map(x =>
-      `<option value="${x.id}" ${u?.parent_id == x.id ? 'selected' : ''}>${escapeHtml(x.prenom + ' ' + x.nom)} (${niveauLabel(x.niveau)})</option>`
-    )).join('')
-  const m = modal(isEdit ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur', `
-    <form id="userForm">
+// === Modal création/édition agent (unifié) ===
+async function unifiedAgentModal(agent, allUsers, onSuccess) {
+  const isEdit = !!agent
+  const a = agent || { niveau: 1 }
+  const niveau = a.niveau ?? 1
+  const { data: pp } = await api.get('/admin/agents-crud/parents-possibles?level=' + niveau).catch(() => ({ data: { parents: [] } }))
+
+  const m = modal(`<i class="fas fa-${isEdit ? 'pen' : 'user-plus'}"></i> ${isEdit ? 'Modifier l\'agent' : 'Créer un agent'}`, `
+    <form id="uaForm">
       <div class="form-grid">
-        <div class="form-group"><label>Prénom <span class="req">*</span></label><input id="prenom" required value="${escapeHtml(u?.prenom || '')}"/></div>
-        <div class="form-group"><label>Nom <span class="req">*</span></label><input id="nom" required value="${escapeHtml(u?.nom || '')}"/></div>
-        <div class="form-group"><label>Email <span class="req">*</span></label><input id="email" type="email" required value="${escapeHtml(u?.email || '')}"/></div>
-        <div class="form-group"><label>Téléphone</label><input id="telephone" value="${escapeHtml(u?.telephone || '')}"/></div>
-        <div class="form-group">
-          <label>Rôle</label>
-          <select id="role">
-            <option value="agent" ${u?.role === 'agent' ? 'selected' : ''}>Agent commercial</option>
-            <option value="superadmin" ${u?.role === 'superadmin' ? 'selected' : ''}>Superadmin</option>
+        <div class="form-group"><label>Prénom <span class="req">*</span></label><input id="uaPrenom" value="${escapeHtml(a.prenom || '')}" required/></div>
+        <div class="form-group"><label>Nom <span class="req">*</span></label><input id="uaNom" value="${escapeHtml(a.nom || '')}" required/></div>
+        <div class="form-group" style="grid-column:1/-1"><label>Email <span class="req">*</span></label><input id="uaEmail" type="email" value="${escapeHtml(a.email || '')}" required/></div>
+        <div class="form-group"><label>Téléphone</label><input id="uaTel" value="${escapeHtml(a.telephone || '')}"/></div>
+        <div class="form-group"><label>IBAN</label><input id="uaIban" value="${escapeHtml(a.iban || '')}"/></div>
+        <div class="form-group"><label>Niveau MLM <span class="req">*</span></label>
+          <select id="uaNiveau">
+            ${[0,1,2,3,4,5].map(n => `<option value="${n}" ${n===niveau?'selected':''}>N${n}${n===0?' — Agent racine':''}</option>`).join('')}
           </select>
         </div>
-        <div class="form-group" id="niveauWrap">
-          <label>Niveau</label>
-          <select id="niveau">
-            <option value="0" ${u?.niveau === 0 ? 'selected' : ''}>0 — Agent commercial</option>
-            <option value="1" ${u?.niveau === 1 ? 'selected' : ''}>1 — Sous-agent N1</option>
-            <option value="2" ${u?.niveau === 2 ? 'selected' : ''}>2 — Sous-agent N2</option>
+        <div class="form-group"><label>Agent parent</label>
+          <select id="uaParent">
+            <option value="">— ${niveau === 0 ? 'Pas de parent' : 'Choisir parent'} —</option>
+            ${pp.parents.map(p => `<option value="${p.id}" ${a.parent_id == p.id ? 'selected' : ''}>${escapeHtml(p.prenom + ' ' + p.nom)} (N${p.niveau})</option>`).join('')}
           </select>
         </div>
-        <div class="form-group" id="parentWrap" style="grid-column:1/-1">
-          <label>Agent parent (pour MLM)</label>
-          <select id="parent_id">${parentOptions}</select>
-        </div>
-        <div class="form-group" style="grid-column:1/-1"><label>IBAN</label><input id="iban" value="${escapeHtml(u?.iban || '')}"/></div>
-        ${!isEdit ? '<div class="form-group" style="grid-column:1/-1"><label>Mot de passe <span class="req">*</span></label><input id="password" type="password" required minlength="6" placeholder="Min 6 caractères"/></div>' : ''}
-        <div class="form-group" style="grid-column:1/-1"><label>Notes</label><textarea id="notes" rows="2">${escapeHtml(u?.notes || '')}</textarea></div>
-        ${isEdit ? `<div class="form-group"><label>Statut</label><select id="actif"><option value="1" ${u?.actif ? 'selected' : ''}>Actif</option><option value="0" ${!u?.actif ? 'selected' : ''}>Inactif</option></select></div>` : ''}
+        ${!isEdit ? `<div class="form-group" style="grid-column:1/-1"><label>Mot de passe <small class="text-muted">(auto-généré si vide)</small></label><input id="uaPwd" type="text" placeholder="laisser vide pour auto-générer"/></div>` : ''}
+        ${isEdit ? `<div class="form-group"><label>Statut</label><select id="uaActif"><option value="1" ${a.actif ? 'selected' : ''}>Actif</option><option value="0" ${!a.actif ? 'selected' : ''}>Inactif</option></select></div>` : ''}
       </div>
       <div class="form-actions">
-        <button type="button" class="btn btn-secondary" id="cancelBtn">Annuler</button>
-        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Enregistrer</button>
+        <button type="button" class="btn btn-secondary" data-close>Annuler</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> ${isEdit ? 'Enregistrer' : 'Créer'}</button>
       </div>
     </form>`)
-  const toggleNiveau = () => {
-    const isAdmin = m.el.querySelector('#role').value === 'superadmin'
-    m.el.querySelector('#niveauWrap').style.display = isAdmin ? 'none' : ''
-    m.el.querySelector('#parentWrap').style.display = isAdmin ? 'none' : ''
+
+  m.el.querySelector('[data-close]').onclick = m.close
+  m.el.querySelector('#uaNiveau').onchange = async () => {
+    const lvl = parseInt(m.el.querySelector('#uaNiveau').value)
+    const { data: nn } = await api.get('/admin/agents-crud/parents-possibles?level=' + lvl).catch(() => ({ data: { parents: [] } }))
+    m.el.querySelector('#uaParent').innerHTML = `<option value="">— ${lvl === 0 ? 'Pas de parent' : 'Choisir parent'} —</option>` +
+      nn.parents.map(p => `<option value="${p.id}">${escapeHtml(p.prenom + ' ' + p.nom)} (N${p.niveau})</option>`).join('')
   }
-  m.el.querySelector('#role').onchange = toggleNiveau; toggleNiveau()
-  m.el.querySelector('#cancelBtn').onclick = m.close
-  m.el.querySelector('#userForm').onsubmit = async e => {
+  m.el.querySelector('#uaForm').onsubmit = async e => {
     e.preventDefault()
-    const payload = {
-      prenom: m.el.querySelector('#prenom').value.trim(),
-      nom: m.el.querySelector('#nom').value.trim(),
-      email: m.el.querySelector('#email').value.trim(),
-      telephone: m.el.querySelector('#telephone').value.trim() || null,
-      role: m.el.querySelector('#role').value,
-      niveau: parseInt(m.el.querySelector('#niveau').value),
-      parent_id: m.el.querySelector('#parent_id').value ? parseInt(m.el.querySelector('#parent_id').value) : null,
-      iban: m.el.querySelector('#iban').value.trim() || null,
-      notes: m.el.querySelector('#notes').value.trim() || null
+    const body = {
+      email: m.el.querySelector('#uaEmail').value.trim(),
+      nom: m.el.querySelector('#uaNom').value.trim(),
+      prenom: m.el.querySelector('#uaPrenom').value.trim(),
+      telephone: m.el.querySelector('#uaTel').value.trim() || null,
+      iban: m.el.querySelector('#uaIban').value.trim() || null,
+      niveau: parseInt(m.el.querySelector('#uaNiveau').value),
+      parent_id: m.el.querySelector('#uaParent').value ? parseInt(m.el.querySelector('#uaParent').value) : null
     }
-    if (!isEdit) payload.password = m.el.querySelector('#password').value
-    if (isEdit) payload.actif = parseInt(m.el.querySelector('#actif').value)
+    if (isEdit) body.actif = parseInt(m.el.querySelector('#uaActif')?.value || '1')
     try {
-      if (isEdit) await api.put('/admin/users/' + id, payload)
-      else await api.post('/admin/users', payload)
-      toast('Enregistré'); m.close(); navigate('users')
+      if (isEdit) {
+        await api.put('/admin/agents-crud/' + agent.id, body)
+        toast('Agent modifié'); m.close(); onSuccess && onSuccess()
+      } else {
+        body.password = m.el.querySelector('#uaPwd')?.value.trim() || null
+        const r = await api.post('/admin/agents-crud/create', body)
+        m.close()
+        showAccessCodeModal(r.data.code_acces, () => onSuccess && onSuccess())
+      }
     } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
   }
 }
 
-function resetPasswordModal(id) {
+// === Modal création/édition superadmin ===
+function unifiedSuperadminModal(user, onSuccess) {
+  const isEdit = !!user
+  const u = user || {}
+  const m = modal(`<i class="fas fa-shield-halved"></i> ${isEdit ? 'Modifier le superadmin' : 'Nouveau superadmin'}`, `
+    <form id="saForm">
+      <div class="form-grid">
+        <div class="form-group"><label>Prénom <span class="req">*</span></label><input id="saPrenom" required value="${escapeHtml(u.prenom || '')}"/></div>
+        <div class="form-group"><label>Nom <span class="req">*</span></label><input id="saNom" required value="${escapeHtml(u.nom || '')}"/></div>
+        <div class="form-group"><label>Email <span class="req">*</span></label><input id="saEmail" type="email" required value="${escapeHtml(u.email || '')}"/></div>
+        <div class="form-group"><label>Téléphone</label><input id="saTel" value="${escapeHtml(u.telephone || '')}"/></div>
+        ${!isEdit ? `<div class="form-group" style="grid-column:1/-1"><label>Mot de passe <span class="req">*</span></label><input id="saPwd" type="password" required minlength="6" placeholder="Min 6 caractères"/></div>` : ''}
+        ${isEdit ? `<div class="form-group"><label>Statut</label><select id="saActif"><option value="1" ${u.actif ? 'selected' : ''}>Actif</option><option value="0" ${!u.actif ? 'selected' : ''}>Inactif</option></select></div>` : ''}
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" id="saCancelBtn">Annuler</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Enregistrer</button>
+      </div>
+    </form>`)
+  m.el.querySelector('#saCancelBtn').onclick = m.close
+  m.el.querySelector('#saForm').onsubmit = async e => {
+    e.preventDefault()
+    const payload = {
+      prenom: m.el.querySelector('#saPrenom').value.trim(),
+      nom: m.el.querySelector('#saNom').value.trim(),
+      email: m.el.querySelector('#saEmail').value.trim(),
+      telephone: m.el.querySelector('#saTel').value.trim() || null,
+      role: 'superadmin',
+      niveau: null
+    }
+    if (!isEdit) payload.password = m.el.querySelector('#saPwd').value
+    if (isEdit) payload.actif = parseInt(m.el.querySelector('#saActif').value)
+    try {
+      if (isEdit) await api.put('/admin/users/' + user.id, payload)
+      else await api.post('/admin/users', payload)
+      toast('Enregistré'); m.close(); onSuccess && onSuccess()
+    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
+  }
+}
+
+// === Modal reset mot de passe (partagé) ===
+function resetPasswordModal(id, type = 'agent') {
+  const endpoint = type === 'superadmin'
+    ? `/admin/users/${id}/reset-password`
+    : `/admin/omnipotence/user/${id}/password`
+  const isOmnipotence = type !== 'superadmin'
   const m = modal('Réinitialiser le mot de passe', `
     <form id="pwdForm">
       <div class="form-group"><label>Nouveau mot de passe <span class="req">*</span></label>
         <input id="np" type="password" required minlength="6" placeholder="Min 6 caractères"/></div>
       <p class="text-muted" style="font-size:.85rem">L'utilisateur sera déconnecté de toutes ses sessions actives.</p>
       <div class="form-actions">
-        <button type="button" class="btn btn-secondary" id="cancelBtn">Annuler</button>
+        <button type="button" class="btn btn-secondary" id="cancelPwdBtn">Annuler</button>
         <button type="submit" class="btn btn-primary"><i class="fas fa-key"></i> Réinitialiser</button>
       </div>
     </form>`)
-  m.el.querySelector('#cancelBtn').onclick = m.close
+  m.el.querySelector('#cancelPwdBtn').onclick = m.close
   m.el.querySelector('#pwdForm').onsubmit = async e => {
     e.preventDefault()
     try {
-      await api.post(`/admin/users/${id}/reset-password`, { new_password: m.el.querySelector('#np').value })
+      const pwd = m.el.querySelector('#np').value
+      if (isOmnipotence) await api.put(endpoint, { new_password: pwd })
+      else await api.post(endpoint, { new_password: pwd })
       toast('Mot de passe modifié'); m.close()
     } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
   }
@@ -1744,6 +1950,17 @@ PAGES['agents'] = async (c) => {
       <div class="stat-card"><div class="stat-label">Marques</div><div class="stat-value">${totalMarques}</div></div>
       <div class="stat-card"><div class="stat-label">CA cumulé</div><div class="stat-value">${fmtEUR(totalCA)}</div></div>
     </div>
+    <div style="display:flex;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
+      <input id="agentDrillSearch" placeholder="🔍 Filtrer par nom, email…" style="flex:1;min-width:220px;padding:.45rem .75rem;border:1px solid var(--border);border-radius:6px;font-size:.88rem"/>
+      <select id="agentDrillNiveau" style="padding:.45rem .75rem;border:1px solid var(--border);border-radius:6px;font-size:.88rem">
+        <option value="">Tous niveaux</option>
+        <option value="0">N0</option><option value="1">N1</option><option value="2">N2</option>
+        <option value="3">N3</option><option value="4">N4</option><option value="5">N5</option>
+      </select>
+      <select id="agentDrillStatut" style="padding:.45rem .75rem;border:1px solid var(--border);border-radius:6px;font-size:.88rem">
+        <option value="">Tous statuts</option><option value="1">Actifs</option><option value="0">Inactifs</option>
+      </select>
+    </div>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr>
@@ -1757,7 +1974,7 @@ PAGES['agents'] = async (c) => {
           <th class="text-right">Actions</th>
         </tr></thead>
         <tbody>${agents.map(a => `
-          <tr style="cursor:pointer" data-row="${a.id}">
+          <tr style="cursor:pointer" data-row="${a.id}" data-nom="${escapeHtml((a.prenom+' '+a.nom).toLowerCase())}" data-email="${escapeHtml((a.email||'').toLowerCase())}" data-niveau="${a.niveau}" data-actif="${a.actif ? '1' : '0'}">
             <td>
               <strong>${escapeHtml(a.prenom + ' ' + a.nom)}</strong>
               <div class="text-muted" style="font-size:.8rem">${escapeHtml(a.email)}</div>
@@ -1793,6 +2010,22 @@ PAGES['agents'] = async (c) => {
       navigate('agents')
     }
   )
+
+  // Filtres drill-down
+  const filterDrill = () => {
+    const s = document.getElementById('agentDrillSearch').value.toLowerCase().trim()
+    const n = document.getElementById('agentDrillNiveau').value
+    const st = document.getElementById('agentDrillStatut').value
+    c.querySelectorAll('[data-row]').forEach(tr => {
+      const ok = (!s || tr.dataset.nom?.includes(s) || tr.dataset.email?.includes(s)) &&
+                 (!n || tr.dataset.niveau === n) &&
+                 (!st || tr.dataset.actif === st)
+      tr.style.display = ok ? '' : 'none'
+    })
+  }
+  document.getElementById('agentDrillSearch').oninput = filterDrill
+  document.getElementById('agentDrillNiveau').onchange = filterDrill
+  document.getElementById('agentDrillStatut').onchange = filterDrill
 }
 
 // --- Détail d'un agent (drill-down) ---
@@ -1942,7 +2175,7 @@ PAGES['__agent_detail'] = async (c, agentId) => {
   `
 
   document.getElementById('btnBack').onclick = () => navigate('agents')
-  document.getElementById('btnEdit').onclick = () => navigate('users')
+  document.getElementById('btnEdit').onclick = () => navigate('gestion-utilisateurs')
   c.querySelectorAll('[data-add-marque]').forEach(b => {
     b.onclick = (e) => {
       e.preventDefault(); e.stopPropagation()
@@ -8551,137 +8784,6 @@ PAGES['admin-factures-resto'] = async (c) => {
         factureViewerModal(data.facture_id)
       }
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
-  }
-}
-
-// ============================================================
-// === ADMIN CRUD AGENTS (omnipotence) ========================
-// ============================================================
-PAGES['admin-agents-crud'] = async (c) => {
-  const { data } = await api.get('/admin/agents-crud')
-  const agents = data.agents || []
-  c.innerHTML = `
-    <div class="page-header">
-      <div><h1><i class="fas fa-user-shield"></i> Gestion des agents (Omnipotence)</h1>
-        <div class="subtitle">${agents.length} agent${agents.length > 1 ? 's' : ''} — créer, modifier, assigner, désactiver, supprimer</div></div>
-      <button class="btn btn-primary" id="newAgent"><i class="fas fa-user-plus"></i> Créer un agent</button>
-    </div>
-    <div class="card">
-      <div class="card-title"><i class="fas fa-list"></i> Tous les agents</div>
-      <div class="table-wrap"><table class="data-table">
-        <thead><tr><th>Nom</th><th>Email</th><th>Niveau</th><th>Parent</th><th class="text-right">Filleuls</th><th class="text-right">Restos</th><th>Statut</th><th>Dernière connexion</th><th class="text-right">Actions</th></tr></thead>
-        <tbody>${agents.length ? agents.map(a => `<tr>
-          <td><strong>${escapeHtml(a.prenom + ' ' + a.nom)}</strong></td>
-          <td style="font-size:.85rem">${escapeHtml(a.email)}</td>
-          <td>${niveauPill(a.niveau)}</td>
-          <td>${a.parent_nom ? escapeHtml(a.parent_nom) : '<span class="text-muted">—</span>'}</td>
-          <td class="text-right">${a.nb_enfants_directs}</td>
-          <td class="text-right">${a.nb_restos}</td>
-          <td>${a.actif ? '<span class="badge badge-primary">Actif</span>' : '<span class="badge badge-danger">Inactif</span>'}</td>
-          <td style="font-size:.85rem">${fmtDateTime(a.derniere_connexion)}</td>
-          <td class="text-right" style="white-space:nowrap">
-            <button class="btn btn-sm btn-secondary" data-edit="${a.id}" title="Modifier"><i class="fas fa-edit"></i></button>
-            <button class="btn btn-sm ${a.actif ? 'btn-warning' : 'btn-primary'}" data-toggle="${a.id}" data-actif="${a.actif}" title="${a.actif ? 'Désactiver' : 'Activer'}"><i class="fas fa-${a.actif ? 'pause' : 'play'}"></i></button>
-            <button class="btn btn-sm btn-info" data-pwd="${a.id}" title="Reset mot de passe"><i class="fas fa-key"></i></button>
-            <button class="btn btn-sm btn-danger" data-del="${a.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
-          </td>
-        </tr>`).join('') : '<tr><td colspan="9" class="text-center text-muted">Aucun agent</td></tr>'}</tbody>
-      </table></div>
-    </div>
-  `
-  c.querySelector('#newAgent').onclick = () => adminAgentFormModal(null, () => navigate('admin-agents-crud'))
-  c.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
-    const a = agents.find(x => x.id == b.dataset.edit)
-    adminAgentFormModal(a, () => navigate('admin-agents-crud'))
-  })
-  c.querySelectorAll('[data-toggle]').forEach(b => b.onclick = () => {
-    const id = b.dataset.toggle, actif = b.dataset.actif === '1'
-    const url = actif ? '/admin/agents-crud/' + id + '/desactiver' : '/admin/agents-crud/' + id + '/activer'
-    confirmDialog(actif ? 'Désactiver cet agent ? Toutes ses sessions seront fermées.' : 'Activer cet agent ?',
-      async () => { await api.put(url); toast('OK'); navigate('admin-agents-crud') })
-  })
-  c.querySelectorAll('[data-pwd]').forEach(b => b.onclick = () => {
-    const id = b.dataset.pwd
-    const pwd = prompt('Nouveau mot de passe (≥6 caractères) :')
-    if (!pwd) return
-    api.put('/admin/omnipotence/user/' + id + '/password', { new_password: pwd })
-      .then(() => toast('Mot de passe modifié'))
-      .catch(e => toast(e.response?.data?.error || 'Erreur', 'error'))
-  })
-  c.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
-    confirmDialog('Supprimer définitivement cet agent ? (Refusé s\'il a des filleuls ou restaurants associés)',
-      async () => {
-        try { await api.delete('/admin/agents-crud/' + b.dataset.del); toast('Agent supprimé'); navigate('admin-agents-crud') }
-        catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
-      })
-  })
-}
-
-async function adminAgentFormModal(agent, onSuccess) {
-  const isEdit = !!agent
-  const a = agent || { niveau: 1 }
-  const niveau = a.niveau ?? 1
-  const { data: pp } = await api.get('/admin/agents-crud/parents-possibles?level=' + niveau).catch(() => ({ data: { parents: [] } }))
-
-  const m = modal(`<i class="fas fa-${isEdit ? 'edit' : 'user-plus'}"></i> ${isEdit ? 'Modifier' : 'Créer'} un agent`, `
-    <form id="aaForm">
-      <div class="form-grid">
-        <div class="form-group"><label>Prénom <span class="req">*</span></label><input id="aaPrenom" value="${escapeHtml(a.prenom || '')}" required /></div>
-        <div class="form-group"><label>Nom <span class="req">*</span></label><input id="aaNom" value="${escapeHtml(a.nom || '')}" required /></div>
-        <div class="form-group" style="grid-column:1/-1"><label>Email <span class="req">*</span></label><input id="aaEmail" type="email" value="${escapeHtml(a.email || '')}" required /></div>
-        <div class="form-group"><label>Téléphone</label><input id="aaTel" value="${escapeHtml(a.telephone || '')}" /></div>
-        <div class="form-group"><label>IBAN</label><input id="aaIban" value="${escapeHtml(a.iban || '')}" /></div>
-        <div class="form-group"><label>Niveau MLM <span class="req">*</span></label>
-          <select id="aaNiveau">
-            ${[0,1,2,3,4,5].map(n => `<option value="${n}" ${n===niveau?'selected':''}>N${n}${n===0?' (Commercial racine)':''}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group"><label>Parent (selon niveau)</label>
-          <select id="aaParent">
-            <option value="">— ${niveau === 0 ? 'Pas de parent' : 'Choisir parent'} —</option>
-            ${pp.parents.map(p => `<option value="${p.id}" ${a.parent_id == p.id ? 'selected' : ''}>${escapeHtml(p.prenom + ' ' + p.nom)} (N${p.niveau})</option>`).join('')}
-          </select>
-        </div>
-        ${!isEdit ? `<div class="form-group" style="grid-column:1/-1"><label>Mot de passe (optionnel — auto-généré si vide)</label><input id="aaPwd" type="text" placeholder="laisser vide pour générer" /></div>` : ''}
-      </div>
-      <div class="form-actions">
-        <button type="button" class="btn btn-secondary" data-close>Annuler</button>
-        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> ${isEdit ? 'Enregistrer' : 'Créer'}</button>
-      </div>
-    </form>
-  `)
-  m.el.querySelector('[data-close]').onclick = () => m.close()
-  m.el.querySelector('#aaNiveau').onchange = async () => {
-    const lvl = parseInt(m.el.querySelector('#aaNiveau').value)
-    const { data: nn } = await api.get('/admin/agents-crud/parents-possibles?level=' + lvl).catch(() => ({ data: { parents: [] } }))
-    m.el.querySelector('#aaParent').innerHTML = `<option value="">— ${lvl === 0 ? 'Pas de parent' : 'Choisir parent'} —</option>` +
-      nn.parents.map(p => `<option value="${p.id}">${escapeHtml(p.prenom + ' ' + p.nom)} (N${p.niveau})</option>`).join('')
-  }
-  m.el.querySelector('#aaForm').onsubmit = async e => {
-    e.preventDefault()
-    const body = {
-      email: m.el.querySelector('#aaEmail').value.trim(),
-      nom: m.el.querySelector('#aaNom').value.trim(),
-      prenom: m.el.querySelector('#aaPrenom').value.trim(),
-      telephone: m.el.querySelector('#aaTel').value.trim() || null,
-      iban: m.el.querySelector('#aaIban').value.trim() || null,
-      niveau: parseInt(m.el.querySelector('#aaNiveau').value),
-      parent_id: m.el.querySelector('#aaParent').value ? parseInt(m.el.querySelector('#aaParent').value) : null
-    }
-    try {
-      if (isEdit) {
-        await api.put('/admin/agents-crud/' + agent.id, body)
-        toast('Agent modifié')
-      } else {
-        body.password = m.el.querySelector('#aaPwd')?.value.trim() || null
-        const r = await api.post('/admin/agents-crud/create', body)
-        m.close()
-        showAccessCodeModal(r.data.code_acces, () => onSuccess && onSuccess())
-        return
-      }
-      m.close()
-      onSuccess && onSuccess()
-    } catch (err) { toast(err.response?.data?.error || 'Erreur', 'error') }
   }
 }
 
