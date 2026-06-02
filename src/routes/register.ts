@@ -56,37 +56,46 @@ app.get('/check/:code', async (c) => {
   })
 })
 
-// ===== PUBLIC : S'inscrire avec un code =====
+// ===== PUBLIC : S'inscrire (avec OU sans code d'invitation) =====
+// - Avec code : rattachement au parrain selon l'invitation (niveau_cible + parent_id)
+// - Sans code : agent direct DropEat (niveau=0, parent_id=NULL)
 app.post('/', async (c) => {
   const data = await c.req.json()
   const { code, email, password, nom, prenom, telephone, iban } = data
 
-  if (!code || !email || !password || !nom || !prenom) {
-    return c.json({ error: 'Code, email, mot de passe, nom et prénom requis' }, 400)
+  if (!email || !password || !nom || !prenom) {
+    return c.json({ error: 'Email, mot de passe, nom et prénom requis' }, 400)
   }
   if (password.length < 6) {
     return c.json({ error: 'Mot de passe trop court (6 caractères min)' }, 400)
   }
 
-  // Vérifier le code
-  const inv = await c.env.DB.prepare(`
-    SELECT * FROM invitations_agent WHERE code = ?
-  `).bind(code).first() as any
-  if (!inv) return c.json({ error: 'Code invalide' }, 400)
-  if (inv.utilisee) return c.json({ error: 'Code déjà utilisé' }, 400)
-  if (inv.expire_at && new Date(inv.expire_at) < new Date()) {
-    return c.json({ error: 'Code expiré' }, 400)
+  // Code d'invitation OPTIONNEL : si fourni, on vérifie et on rattache au parrain.
+  // Sinon, l'agent s'inscrit en N=0 sans parent (agent direct DropEat).
+  let inv: any = null
+  let niveauCible = 0
+  let parentId: number | null = null
+  if (code && String(code).trim()) {
+    inv = await c.env.DB.prepare(`
+      SELECT * FROM invitations_agent WHERE code = ?
+    `).bind(String(code).trim()).first() as any
+    if (!inv) return c.json({ error: 'Code invalide' }, 400)
+    if (inv.utilisee) return c.json({ error: 'Code déjà utilisé' }, 400)
+    if (inv.expire_at && new Date(inv.expire_at) < new Date()) {
+      return c.json({ error: 'Code expiré' }, 400)
+    }
+    // Si l'invitation pré-remplit un email, contrainte stricte
+    if (inv.email_pre_rempli && inv.email_pre_rempli.toLowerCase() !== email.toLowerCase()) {
+      return c.json({ error: `Cette invitation est réservée à ${inv.email_pre_rempli}` }, 400)
+    }
+    niveauCible = inv.niveau_cible
+    parentId = inv.parent_id
   }
 
   // Vérifier que l'email n'existe pas déjà
   const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?')
     .bind(email).first()
   if (existing) return c.json({ error: 'Cet email est déjà utilisé' }, 400)
-
-  // Si l'invitation pré-remplit un email, contrainte stricte
-  if (inv.email_pre_rempli && inv.email_pre_rempli.toLowerCase() !== email.toLowerCase()) {
-    return c.json({ error: `Cette invitation est réservée à ${inv.email_pre_rempli}` }, 400)
-  }
 
   // Créer le compte
   const passwordHash = await hashPassword(password)
@@ -100,18 +109,20 @@ app.post('/', async (c) => {
     prenom,
     telephone || null,
     iban || null,
-    inv.niveau_cible,
-    inv.parent_id
+    niveauCible,
+    parentId
   ).run()
 
   const newUserId = result.meta.last_row_id as number
 
-  // Marquer l'invitation comme utilisée
-  await c.env.DB.prepare(`
-    UPDATE invitations_agent
-    SET utilisee = 1, used_at = CURRENT_TIMESTAMP, user_cree_id = ?
-    WHERE id = ?
-  `).bind(newUserId, inv.id).run()
+  // Si invitation utilisée, marquer comme telle
+  if (inv) {
+    await c.env.DB.prepare(`
+      UPDATE invitations_agent
+      SET utilisee = 1, used_at = CURRENT_TIMESTAMP, user_cree_id = ?
+      WHERE id = ?
+    `).bind(newUserId, inv.id).run()
+  }
 
   // Audit log
   await c.env.DB.prepare(`
@@ -119,9 +130,30 @@ app.post('/', async (c) => {
     VALUES (?, 'register', 'user', ?, ?, ?)
   `).bind(
     newUserId, newUserId,
-    JSON.stringify({ via_invitation: inv.id, parent_id: inv.parent_id }),
+    JSON.stringify({ via_invitation: inv?.id || null, parent_id: parentId, niveau: niveauCible }),
     c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || null
   ).run().catch(() => {})
+
+  // Notification superadmin si inscription libre (sans code)
+  if (!inv) {
+    try {
+      const admins = await c.env.DB.prepare(
+        `SELECT id FROM users WHERE role = 'superadmin' AND actif = 1`
+      ).all() as any
+      for (const a of (admins.results || [])) {
+        await c.env.DB.prepare(`
+          INSERT INTO notifications (destinataire_id, type, titre, message, lien, metadata)
+          VALUES (?, 'inscription_libre', ?, ?, ?, ?)
+        `).bind(
+          a.id,
+          'Nouvelle inscription libre',
+          `${prenom} ${nom} (${email.toLowerCase()}) vient de créer un compte agent direct DropEat`,
+          `/app#agents`,
+          JSON.stringify({ user_id: newUserId, email: email.toLowerCase() })
+        ).run().catch(() => {})
+      }
+    } catch {}
+  }
 
   // Auto-login : créer une session
   const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || null
@@ -144,8 +176,8 @@ app.post('/', async (c) => {
       role: 'agent',
       nom,
       prenom,
-      niveau: inv.niveau_cible,
-      parent_id: inv.parent_id
+      niveau: niveauCible,
+      parent_id: parentId
     }
   })
 })

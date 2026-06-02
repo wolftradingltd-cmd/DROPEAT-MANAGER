@@ -165,12 +165,18 @@ async function renderRegister(prefilledCode) {
               <strong>${escapeHtml(invitation.parent.prenom + ' ' + invitation.parent.nom)}</strong>
               en tant que <strong>${niveauLabel(invitation.niveau_cible)}</strong>.
             </div>
-          ` : ''}
+          ` : `
+            <div class="info-banner" style="background:#f0fdf4;border-left:3px solid #16a34a;padding:.6rem .9rem;border-radius:6px;margin-bottom:.8rem;font-size:.85rem">
+              <i class="fas fa-circle-info"></i>
+              Vous pouvez créer un compte <strong>agent direct DropEat</strong> sans code.
+              Si un parrain vous a transmis un code, saisissez-le ci-dessous pour rejoindre son réseau.
+            </div>
+          `}
           ${invErr ? `<div class="login-error">${escapeHtml(invErr)}</div>` : ''}
           <form id="regForm">
             <div class="form-group">
-              <label>Code d'invitation <span class="req">*</span></label>
-              <input id="rcode" required value="${escapeHtml(prefilledCode || '')}" placeholder="Reçu par votre parrain" />
+              <label>Code d'invitation <small class="text-muted">(optionnel)</small></label>
+              <input id="rcode" value="${escapeHtml(prefilledCode || '')}" placeholder="Laisser vide pour agent direct DropEat" />
             </div>
             <div class="form-grid">
               <div class="form-group"><label>Prénom <span class="req">*</span></label><input id="rprenom" required /></div>
@@ -265,8 +271,9 @@ function renderLogin() {
             Email : <code>admin@dropeat.io</code> · Mot de passe : <code>admin123</code><br/>
             <em>Changez votre mot de passe immédiatement après connexion.</em>
             <hr style="margin:.6rem 0;border-color:#e2e8f0"/>
-            <i class="fas fa-user-plus"></i> Vous avez reçu un code d'invitation ?
+            <i class="fas fa-user-plus"></i> Pas encore de compte ?
             <a href="#" id="goRegister"><strong>Créer mon compte</strong></a>
+            <br/><small class="text-muted">Inscription libre ou via code d'invitation</small>
           </div>
         </div>
       </div>
