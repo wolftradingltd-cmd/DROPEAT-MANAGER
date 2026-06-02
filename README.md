@@ -109,6 +109,50 @@ Alignement BDD pour 4 commerciaux (Sabrina Hadri, Fabien Rosso, Elbac Haidar Moh
 #### Refactor UI — Fusion Utilisateurs + Agents
 Page unique `gestion-utilisateurs` qui remplace `users` + `admin-agents-crud` (2 entrées de menu redondantes supprimées). Onglets internes Agents / Superadmins, filtres drill-down (recherche, niveau, statut), stats globales en en-tête. Commit `168482b`.
 
+#### Migration 0020 — Refonte unifiée des tranches (commit `a10a462`)
+
+**Logique métier finalisée** (Clause 5 du contrat) :
+
+1. **Compteur unifié** par agent : une tranche compte **5 éléments qualifiants mélangés (restos + marques)** dans l'ordre chronologique de leur validation (`restaurants.date_signature` / `marques_virtuelles.date_lancement`).
+2. **5ᵉ position = attribution** 100% portefeuille à l'agent.
+3. **Propagation resto → marques** : quand un resto atteint la 5ᵉ position et devient 100% portefeuille, toutes ses marques **futures** héritent automatiquement (`heritee_portefeuille=1`, `exclue_mlm=1`). Elles n'entrent dans aucune tranche.
+4. **Marque sur resto déjà 100% PF** = héritage direct à la création (Q3).
+5. **Marque créée après que son resto a déjà été compté dans une tranche** = la marque va dans la tranche **actuelle** au jour de sa création (Q4, chronologie inter-tranches).
+6. **Anti double-dipping limité à la MÊME tranche** : un resto et l'une de ses marques ne peuvent pas être tous deux dans la même tranche, mais peuvent l'être dans des tranches différentes (logique chronologique légitime).
+
+**Tables modifiées :**
+- `tranches_attribution` : nouveau type `'unifiee'` + colonne `element_attribue_kind`
+- `tranche_elements` : colonne `hooked_resto_id` (traçabilité)
+- `marques_virtuelles` : colonnes `heritee_portefeuille`, `exclue_mlm`, `tranche_source_id`, `date_heritage`
+- Nouvelle table `tranches_recalcul_log` : audit des recalculs
+
+**Refactor `src/lib/tranches.ts` :**
+- Nouvelle fonction `qualifierApport(agentId, kind, elementId)` (compteur unifié)
+- Backward compat : `qualifierElement/dequalifierElement` délèguent
+- `propagerHeritageResto()`, `shouldInheritFromResto()` : propagation/héritage
+- `listApportsChronologiques()` : journal chronologique pour reset+replay
+- `recalculerTranchesAgent()` : reset + rejeu chronologique (ne touche **pas** aux agents/restos/marques)
+- `auditTranches()` : détection d'anomalies cross-agents
+
+**Nouveaux endpoints `/api/admin/tranches/*` :**
+| Endpoint | Action |
+|----------|--------|
+| `GET /audit` | Anomalies de cohérence (tranches 5/5 ouvertes, clôturées < 5, doublons même tranche, marques PF sans tranche, héritages incohérents) |
+| `GET /chronologie?agent_id=X` | Liste ordonnée des apports d'un agent (avant qualification) |
+| `GET /etat?agent_id=X` | Tranche ouverte + clôturées + marques héritées d'un agent |
+| `POST /recalculer { all/agent_id }` | Reset+replay chronologique (préserve agents/restos/marques) |
+| `GET /recalcul-log` | Historique des recalculs |
+
+**Page UI admin "Audit & recalcul tranches"** (CONFIGURATION) :
+- Affichage des anomalies en temps réel
+- Bouton "Recalculer TOUS les agents" (préserve toutes les données métier)
+- Bouton "Recalculer un agent unique"
+- Visualisation de la chronologie d'un agent (apports triés par date + tranche d'appartenance + marques héritées)
+
+**Tests E2E** : `scripts/test-tranches.sh` (23/23 assertions passent — audit, chronologie, recalcul global/individuel, scénario Burger XL inter-tranches, ACL).
+
+**Recalcul effectué sur base locale** : 37 agents, 35 restos, 30 marques **intégralement préservés**. 5 attributions régénérées (Jean #2 = 3 attributions, Sébastien #14 = 2 attributions), 4 marques héritées propagées automatiquement, **audit final = 0 anomalie**.
+
 ---
 
 ### 🏁 Module CHALLENGES commerciaux (migration 0012 + seed 0013)

@@ -293,6 +293,7 @@ const ADMIN_NAV = [
   { id: 'audit', label: 'Audit invisible', icon: 'fa-eye-slash' },
   { section: 'CONFIGURATION' },
   { id: 'paliers', label: 'Paliers', icon: 'fa-layer-group' },
+  { id: 'admin-tranches', label: 'Audit & recalcul tranches', icon: 'fa-scale-balanced' },
   { id: 'admin-email-settings', label: 'Notifications email', icon: 'fa-envelope-open-text' },
   { id: 'profil', label: 'Mon profil', icon: 'fa-user' }
 ]
@@ -4655,6 +4656,221 @@ PAGES['admin-email-settings'] = async (c) => {
       navigate('admin-email-settings')
     }
   )
+}
+
+// =====================================================================
+// AUDIT & RECALCUL DES TRANCHES (logique unifiée chronologique, migration 0020)
+// =====================================================================
+PAGES['admin-tranches'] = async (c) => {
+  c.innerHTML = `
+    <div class="space-y-6">
+      <div>
+        <h2 class="text-2xl font-bold text-slate-900">Audit & recalcul des tranches</h2>
+        <p class="text-slate-600 mt-1">Système unifié : compteur de 5 éléments (restos + marques mélangés) par ordre chronologique. Les marques créées sur un resto déjà 100% portefeuille héritent automatiquement (exclues du MLM).</p>
+      </div>
+
+      <div id="zone-audit" class="bg-white rounded-xl border border-slate-200 p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold flex items-center gap-2"><i class="fas fa-magnifying-glass-chart text-slate-600"></i>Audit global</h3>
+          <button id="btn-refresh-audit" class="px-3 py-1.5 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg"><i class="fas fa-arrows-rotate mr-1"></i>Actualiser</button>
+        </div>
+        <div id="audit-content" class="text-slate-500"><i class="fas fa-spinner fa-spin mr-2"></i>Chargement…</div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-amber-300 p-6">
+        <h3 class="text-lg font-semibold flex items-center gap-2 mb-3"><i class="fas fa-rotate text-amber-600"></i>Recalcul chronologique</h3>
+        <p class="text-sm text-slate-600 mb-4">
+          Le recalcul efface les tranches existantes (sans toucher aux agents/restos/marques) et les reconstruit dans l'ordre chronologique des apports (date_signature restos / date_lancement marques).
+          <br><strong>Cette opération est sûre</strong> : les agents, restaurants et marques sont préservés à l'identique. Seuls les flags dérivés (is_portefeuille_proprietaire) et les tranches sont recalculés.
+        </p>
+        <div class="flex gap-3 flex-wrap">
+          <button id="btn-recalc-all" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium">
+            <i class="fas fa-rotate-right mr-1"></i>Recalculer TOUS les agents
+          </button>
+          <select id="select-agent-recalc" class="px-3 py-2 border border-slate-300 rounded-lg">
+            <option value="">— Choisir un agent —</option>
+          </select>
+          <button id="btn-recalc-one" class="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg font-medium">
+            <i class="fas fa-rotate-right mr-1"></i>Recalculer l'agent sélectionné
+          </button>
+        </div>
+        <div id="recalc-result" class="mt-4"></div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 p-6">
+        <h3 class="text-lg font-semibold flex items-center gap-2 mb-3"><i class="fas fa-clock-rotate-left text-slate-600"></i>Chronologie d'un agent</h3>
+        <p class="text-sm text-slate-600 mb-3">Visualise l'ordre dans lequel les apports d'un agent seraient pris en compte par le moteur de tranches.</p>
+        <div class="flex gap-3 mb-4">
+          <select id="select-agent-chrono" class="px-3 py-2 border border-slate-300 rounded-lg flex-1">
+            <option value="">— Choisir un agent —</option>
+          </select>
+          <button id="btn-chrono" class="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg"><i class="fas fa-eye mr-1"></i>Afficher</button>
+        </div>
+        <div id="chrono-result"></div>
+      </div>
+    </div>
+  `
+
+  async function loadAudit() {
+    const zone = c.querySelector('#audit-content')
+    zone.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Chargement…'
+    try {
+      const { data } = await api.get('/admin/tranches/audit')
+      const s = data.summary
+      if (s.total === 0) {
+        zone.innerHTML = `
+          <div class="flex items-center gap-3 text-green-700 bg-green-50 border border-green-200 rounded-lg p-4">
+            <i class="fas fa-circle-check text-2xl"></i>
+            <div>
+              <div class="font-semibold">Aucune anomalie détectée</div>
+              <div class="text-sm text-green-600">L'ensemble des tranches est cohérent.</div>
+            </div>
+          </div>`
+        return
+      }
+      const rowsHtml = data.anomalies.map(a => `
+        <tr class="border-t border-slate-100">
+          <td class="px-3 py-2"><span class="px-2 py-0.5 text-xs rounded ${a.severity === 'error' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}">${a.severity}</span></td>
+          <td class="px-3 py-2 text-sm font-mono text-slate-500">${a.type}</td>
+          <td class="px-3 py-2 text-sm">${a.agent_nom} <span class="text-slate-400">#${a.agent_id}</span></td>
+          <td class="px-3 py-2 text-sm text-slate-700">${a.details}</td>
+        </tr>
+      `).join('')
+      zone.innerHTML = `
+        <div class="mb-3 flex gap-2">
+          <span class="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-sm">${s.errors} erreur(s)</span>
+          <span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-lg text-sm">${s.warnings} avertissement(s)</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-left">
+            <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr><th class="px-3 py-2">Sévérité</th><th class="px-3 py-2">Type</th><th class="px-3 py-2">Agent</th><th class="px-3 py-2">Détails</th></tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>
+      `
+    } catch (e) {
+      zone.innerHTML = `<div class="text-red-600 text-sm">Erreur : ${e.message}</div>`
+    }
+  }
+
+  async function loadAgents() {
+    try {
+      const { data } = await api.get('/admin/users?role=commercial')
+      const users = data.users || data || []
+      const opts = users.map(u => `<option value="${u.id}">${u.prenom} ${u.nom} (#${u.id})</option>`).join('')
+      c.querySelector('#select-agent-recalc').insertAdjacentHTML('beforeend', opts)
+      c.querySelector('#select-agent-chrono').insertAdjacentHTML('beforeend', opts)
+    } catch (e) { /* ignore */ }
+  }
+
+  c.querySelector('#btn-refresh-audit').onclick = loadAudit
+  c.querySelector('#btn-recalc-all').onclick = async () => {
+    if (!confirm('Recalculer les tranches de TOUS les agents ? (les apports/agents/restos/marques sont préservés)')) return
+    const out = c.querySelector('#recalc-result')
+    out.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Recalcul en cours…'
+    try {
+      const { data } = await api.post('/admin/tranches/recalculer', { all: true })
+      const s = data.summary
+      out.innerHTML = `
+        <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+          <div class="font-semibold text-green-800 mb-2"><i class="fas fa-check mr-1"></i>Recalcul terminé pour ${data.total_agents} agents</div>
+          <div class="text-sm text-green-700">${s.total_attributions} attribution(s), ${s.total_heritages} héritage(s), ${s.total_warnings} avertissement(s) (skip apports déjà comptés).</div>
+        </div>
+      `
+      loadAudit()
+    } catch (e) {
+      out.innerHTML = `<div class="text-red-600">Erreur : ${e.message}</div>`
+    }
+  }
+  c.querySelector('#btn-recalc-one').onclick = async () => {
+    const id = c.querySelector('#select-agent-recalc').value
+    if (!id) { toast('Choisir un agent', 'warning'); return }
+    const out = c.querySelector('#recalc-result')
+    out.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Recalcul en cours…'
+    try {
+      const { data } = await api.post('/admin/tranches/recalculer', { agent_id: parseInt(id) })
+      const r = data.reports[0]
+      out.innerHTML = `
+        <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+          <div class="font-semibold text-green-800 mb-2">Agent #${r.agent_id} recalculé</div>
+          <div class="text-sm text-green-700">Tranches : ${r.tranches_creees}, attributions : ${r.attributions}, héritages : ${r.marques_heritees}</div>
+          ${r.warnings.length ? `<details class="mt-2 text-xs text-slate-600"><summary>${r.warnings.length} avertissement(s)</summary><ul class="mt-2 space-y-1 pl-4 list-disc">${r.warnings.map(w => `<li>${w}</li>`).join('')}</ul></details>` : ''}
+        </div>
+      `
+      loadAudit()
+    } catch (e) {
+      out.innerHTML = `<div class="text-red-600">Erreur : ${e.message}</div>`
+    }
+  }
+  c.querySelector('#btn-chrono').onclick = async () => {
+    const id = c.querySelector('#select-agent-chrono').value
+    if (!id) { toast('Choisir un agent', 'warning'); return }
+    const out = c.querySelector('#chrono-result')
+    out.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Chargement…'
+    try {
+      const { data } = await api.get(`/admin/tranches/chronologie?agent_id=${id}`)
+      if (data.total === 0) { out.innerHTML = '<div class="text-slate-500">Aucun apport pour cet agent.</div>'; return }
+      const etat = await api.get(`/admin/tranches/etat?agent_id=${id}`)
+      const apports = data.apports
+      // construire colonne "tranche d'appartenance" en lisant tranche_elements
+      const rows = apports.map((a, i) => `
+        <tr class="border-t border-slate-100 ${a.is_portefeuille_already ? 'bg-amber-50' : ''}">
+          <td class="px-3 py-2 text-sm text-slate-500">${i + 1}</td>
+          <td class="px-3 py-2 text-sm">${a.date_validation}</td>
+          <td class="px-3 py-2 text-sm"><span class="px-2 py-0.5 text-xs rounded ${a.kind === 'client' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${a.kind}</span></td>
+          <td class="px-3 py-2 text-sm font-medium">${a.nom}</td>
+          <td class="px-3 py-2 text-sm text-slate-500">#${a.element_id}${a.resto_id ? ` (sur resto #${a.resto_id})` : ''}</td>
+          <td class="px-3 py-2 text-sm">${a.is_portefeuille_already ? '<span class="text-amber-700"><i class="fas fa-crown mr-1"></i>100% PF</span>' : ''}</td>
+        </tr>
+      `).join('')
+      const heritees = etat.data.marques_heritees || []
+      const heriteesHtml = heritees.length ? `
+        <div class="mt-6">
+          <h4 class="font-semibold text-slate-800 mb-2"><i class="fas fa-arrow-down-up-across-line text-emerald-600 mr-1"></i>Marques héritées (resto déjà 100% portefeuille)</h4>
+          <ul class="text-sm space-y-1">
+            ${heritees.map(h => `<li class="text-slate-600">• <strong>${h.nom}</strong> (resto ${h.resto_nom}) — héritée le ${h.date_heritage || 'n/a'}</li>`).join('')}
+          </ul>
+        </div>
+      ` : ''
+      const tranchesHtml = `
+        <div class="mb-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+          ${(etat.data.tranches_cloturees || []).map(t => `
+            <div class="bg-amber-50 border border-amber-300 rounded-lg p-3">
+              <div class="text-xs text-amber-700 uppercase">Tranche #${t.numero_tranche} clôturée</div>
+              <div class="font-semibold text-amber-900">${t.element_attribue_nom || 'n/a'}</div>
+              <div class="text-xs text-amber-700">100% portefeuille (${t.element_attribue_kind || t.type})</div>
+            </div>
+          `).join('')}
+          ${etat.data.tranche_ouverte ? `
+            <div class="bg-blue-50 border border-blue-300 rounded-lg p-3">
+              <div class="text-xs text-blue-700 uppercase">Tranche #${etat.data.tranche_ouverte.numero_tranche} ouverte</div>
+              <div class="font-semibold text-blue-900">${etat.data.tranche_ouverte.compteur} / 5</div>
+              <div class="text-xs text-blue-700">${etat.data.tranche_ouverte.restant} restant(s)</div>
+            </div>
+          ` : ''}
+        </div>
+      `
+      out.innerHTML = `
+        ${tranchesHtml}
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-left bg-white border border-slate-200 rounded-lg">
+            <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr><th class="px-3 py-2">#</th><th class="px-3 py-2">Date</th><th class="px-3 py-2">Type</th><th class="px-3 py-2">Nom</th><th class="px-3 py-2">Réf</th><th class="px-3 py-2">PF</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${heriteesHtml}
+      `
+    } catch (e) {
+      out.innerHTML = `<div class="text-red-600">Erreur : ${e.message}</div>`
+    }
+  }
+
+  loadAudit()
+  loadAgents()
 }
 
 // --- Paliers ---
