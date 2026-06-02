@@ -341,6 +341,8 @@ app.post('/agent/create', async (c) => {
       }
 
       created.push({ facture_id: factureId, numero, libelle: g.libelle, montant_ht: totalHT_g, montant_ttc: totalTTC_g })
+      // Hook email — non bloquant
+      try { await notifyFactureEvent(c.env.DB, factureId, 'creee', user.id) } catch (e) { console.error('notify creee (split):', e) }
     }
 
     return c.json({
@@ -399,6 +401,8 @@ app.post('/agent/create', async (c) => {
     ).run()
   }
 
+  // Hook email — non bloquant
+  try { await notifyFactureEvent(c.env.DB, factureId, 'creee', user.id) } catch (e) { console.error('notify creee:', e) }
   return c.json({ success: true, mode: 'groupee', facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
 })
 
@@ -681,6 +685,8 @@ app.post('/resto/create', async (c) => {
         ).run()
       }
       created.push({ facture_id: factureId, numero, libelle: g.libelle, montant_ht: totalHT_g, montant_ttc: totalTTC_g })
+      // Hook email — non bloquant
+      try { await notifyFactureEvent(c.env.DB, factureId, 'creee', user.id) } catch (e) { console.error('notify creee (split):', e) }
     }
 
     return c.json({
@@ -742,6 +748,8 @@ app.post('/resto/create', async (c) => {
     ).run()
   }
 
+  // Hook email — non bloquant
+  try { await notifyFactureEvent(c.env.DB, factureId, 'creee', user.id) } catch (e) { console.error('notify creee:', e) }
   return c.json({ success: true, mode: 'groupee', facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
 })
 
@@ -995,6 +1003,8 @@ app.post('/agent-resto/create', async (c) => {
         ).run()
       }
       created.push({ facture_id: factureId, numero, libelle: g.libelle, montant_ht: totalHT_g, montant_ttc: totalTTC_g })
+      // Hook email — non bloquant
+      try { await notifyFactureEvent(c.env.DB, factureId, 'creee', user.id) } catch (e) { console.error('notify creee (split):', e) }
     }
 
     return c.json({
@@ -1052,6 +1062,8 @@ app.post('/agent-resto/create', async (c) => {
     ).run()
   }
 
+  // Hook email — non bloquant
+  try { await notifyFactureEvent(c.env.DB, factureId, 'creee', user.id) } catch (e) { console.error('notify creee:', e) }
   return c.json({ success: true, mode: 'groupee', facture_id: factureId, numero, montant_ht: totalHT, montant_ttc: totalTTC })
 })
 
