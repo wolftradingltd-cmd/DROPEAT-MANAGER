@@ -31,6 +31,7 @@ import adminMarques from './routes/admin-marques'
 import adminDerogations from './routes/admin-derogations'
 import demandesPaiement from './routes/demandes-paiement'
 import challenges from './routes/challenges'
+import adminSettings from './routes/admin-settings'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -59,6 +60,7 @@ app.route('/api/admin/comptes', adminComptes)
 app.route('/api/admin/agents-crud', adminAgentsCrud)
 app.route('/api/admin/marques', adminMarques)
 app.route('/api/admin/derogations', adminDerogations)
+app.route('/api/admin/settings', adminSettings)
 app.route('/api/shortener', adminShortener)
 
 // Profils société (tout user authentifié)

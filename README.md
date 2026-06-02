@@ -89,6 +89,26 @@ Application web complète pour gérer le suivi des commissions de votre activit�
 #### Migration 0018 — Source of truth Sabrina/Fabien/Elbac/Greg
 Alignement BDD pour 4 commerciaux (Sabrina Hadri, Fabien Rosso, Elbac Haidar Mohamed, Gregory Hadri) : 7 restaurants, 7 marques, 8 comptes plateformes (manager + backup Uber). Commit `1bdfa90`.
 
+#### Migration 0019 — Facture PDF + notifications email
+**Nouveauté** : système complet de génération PDF + envoi automatique d'emails via Resend API.
+
+- **Génération PDF** : `GET /api/factures/:id/pdf` renvoie un HTML standalone optimisé impression (CSS @page A4, prêt à imprimer / Ctrl+P → "Enregistrer en PDF"). Bouton "PDF (nouvel onglet)" dans la modale facture. Compatible Cloudflare Workers (aucune lib Node).
+- **Envoi automatique d'emails** sur les transitions de statut :
+  - `envoyée` → email "facture à valider" au destinataire
+  - `validée` → email de confirmation à l'émetteur
+  - `refusée` → email avec motif au destinataire (l'émetteur)
+  - `payée` → email final avec référence de paiement
+- **Envoi manuel** : `POST /api/factures/:id/email` (bouton "Envoyer par email" dans la modale) — utilise le template `rappel`.
+- **Historique des envois** : `GET /api/factures/:id/envois` affiché en bas de la modale facture (date, événement, destinataire, statut envoyé/échec, émetteur).
+- **Page admin "Notifications email"** (CONFIGURATION > Notifications email) : configuration provider, clé API Resend (chiffrée en base, jamais réexposée en clair), email expéditeur, switch envoi réel / mode log, bouton "Envoyer email de test".
+- **Mode log** : par défaut, `email_enabled=0` → aucun email réellement envoyé, mais l'historique est tracé. À activer après configuration de la clé Resend en production.
+- **Résolution email destinataire** : `facture.dest_email` (override manuel) → `dest_snapshot.email_facturation` → email du user destinataire. Si aucun trouvé : envoi silencieusement ignoré (pas d'erreur bloquante).
+- **Tables ajoutées** : `app_settings` (key-value config), `facture_envois` (historique). Colonnes ajoutées : `factures.dest_email`, `factures.derniere_notif_at`, `factures.nb_envois_email`.
+- **Fichiers ajoutés** : `src/lib/email-service.ts` (350 LOC, templates HTML par événement), `src/lib/facture-pdf.ts` (rendu HTML standalone), `src/routes/admin-settings.ts`.
+
+#### Refactor UI — Fusion Utilisateurs + Agents
+Page unique `gestion-utilisateurs` qui remplace `users` + `admin-agents-crud` (2 entrées de menu redondantes supprimées). Onglets internes Agents / Superadmins, filtres drill-down (recherche, niveau, statut), stats globales en en-tête. Commit `168482b`.
+
 ---
 
 ### 🏁 Module CHALLENGES commerciaux (migration 0012 + seed 0013)

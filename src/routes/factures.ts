@@ -22,6 +22,14 @@ import {
   resolvePeriode,
   type ProfilSociete
 } from '../lib/factures'
+import { renderFactureHTML } from '../lib/facture-pdf'
+import {
+  loadAppSettings,
+  sendEmail,
+  logFactureEnvoi,
+  buildFactureEmail,
+  resolveDestinataireEmail
+} from '../lib/email-service'
 
 // ---------- Helpers période + anti-doublons ----------
 
@@ -1133,6 +1141,8 @@ app.post('/:id/envoyer', async (c) => {
   await c.env.DB.prepare(`
     UPDATE factures SET statut = 'envoyee', envoyee_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).bind(id).run()
+  // Hook email — non bloquant
+  try { await notifyFactureEvent(c.env.DB, id, 'envoyee', user.id) } catch (e) { console.error('notify envoyee:', e) }
   return c.json({ success: true })
 })
 
@@ -1149,6 +1159,7 @@ app.post('/:id/valider', async (c) => {
   await c.env.DB.prepare(`
     UPDATE factures SET statut = 'validee', validee_at = CURRENT_TIMESTAMP, validee_par = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).bind(user.id, id).run()
+  try { await notifyFactureEvent(c.env.DB, id, 'validee', user.id) } catch (e) { console.error('notify validee:', e) }
   return c.json({ success: true })
 })
 
@@ -1164,6 +1175,7 @@ app.post('/:id/refuser', async (c) => {
   await c.env.DB.prepare(`
     UPDATE factures SET statut = 'refusee', motif_refus = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).bind(motif, id).run()
+  try { await notifyFactureEvent(c.env.DB, id, 'refusee', user.id) } catch (e) { console.error('notify refusee:', e) }
   return c.json({ success: true })
 })
 
@@ -1179,6 +1191,166 @@ app.post('/:id/payer', async (c) => {
     UPDATE factures SET statut = 'payee', payee_at = CURRENT_TIMESTAMP,
       reference_paiement = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).bind(reference_paiement || null, id).run()
+  try { await notifyFactureEvent(c.env.DB, id, 'payee', user.id) } catch (e) { console.error('notify payee:', e) }
+  return c.json({ success: true })
+})
+
+// ============================================================
+// === PDF + EMAIL : routes & helpers ==========================
+// ============================================================
+
+/**
+ * Charge une facture complète (avec lignes parsées) pour l'envoi email ou le rendu PDF
+ */
+async function loadFactureComplete(db: D1Database, id: number): Promise<any | null> {
+  const f = await db.prepare(`
+    SELECT f.*,
+      ue.nom as emetteur_nom, ue.prenom as emetteur_prenom, ue.email as emetteur_email,
+      ud.nom as dest_user_nom, ud.prenom as dest_user_prenom, ud.email as dest_user_email,
+      r.nom as dest_restaurant_nom
+    FROM factures f
+    LEFT JOIN users ue ON f.emetteur_user_id = ue.id
+    LEFT JOIN users ud ON f.dest_user_id = ud.id
+    LEFT JOIN restaurants r ON f.dest_restaurant_id = r.id
+    WHERE f.id = ?
+  `).bind(id).first() as any
+  if (!f) return null
+  const { results: lignes } = await db.prepare(
+    'SELECT * FROM facture_lignes WHERE facture_id = ? ORDER BY ordre'
+  ).bind(id).all()
+  return { facture: f, lignes: lignes || [] }
+}
+
+/**
+ * Envoie un email de notification de facture + log dans facture_envois
+ * (helper interne réutilisé par les hooks et l'envoi manuel)
+ */
+async function notifyFactureEvent(
+  db: D1Database,
+  factureId: number,
+  evenement: 'creee' | 'envoyee' | 'validee' | 'refusee' | 'payee' | 'rappel',
+  envoyePar?: number | null,
+  overrideEmail?: string | null
+): Promise<{ skipped: boolean, sent: boolean, error?: string }> {
+  const full = await loadFactureComplete(db, factureId)
+  if (!full) return { skipped: true, sent: false, error: 'Facture introuvable' }
+
+  const f = full.facture
+  const { email: destEmail, nom: destNom } = resolveDestinataireEmail(f)
+  const finalEmail = overrideEmail || destEmail
+  if (!finalEmail) {
+    // Pas d'email destinataire → on log silencieusement (pas d'erreur bloquante)
+    console.log(`[notify] facture ${f.numero} évt ${evenement} : pas d'email destinataire`)
+    return { skipped: true, sent: false }
+  }
+
+  const settings = await loadAppSettings(db)
+  const baseUrl = settings.app_base_url || ''
+  const factureUrl = `${baseUrl}/api/factures/${factureId}/pdf`
+
+  const { subject, html } = buildFactureEmail(evenement, {
+    facture: f,
+    baseUrl,
+    factureUrl,
+    destinataireNom: destNom || undefined
+  })
+
+  const result = await sendEmail(db, {
+    to: finalEmail,
+    to_name: destNom || undefined,
+    subject,
+    html
+  })
+
+  await logFactureEnvoi(db, {
+    facture_id: factureId,
+    evenement,
+    destinataire_email: finalEmail,
+    destinataire_nom: destNom,
+    sujet: subject,
+    result,
+    envoye_par: envoyePar
+  })
+
+  return { skipped: false, sent: result.success, error: result.error }
+}
+
+// ============================================================
+// GET /api/factures/:id/pdf — rendu HTML imprimable
+// (le navigateur peut faire Ctrl+P → Enregistrer en PDF, ou ?print=1 = auto-print)
+// ============================================================
+app.get('/:id/pdf', async (c) => {
+  const user = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  const full = await loadFactureComplete(c.env.DB, id)
+  if (!full) return c.text('Facture introuvable', 404)
+
+  const f = full.facture
+  // ACL : superadmin, émetteur, destinataire user
+  if (user.role !== 'superadmin' && f.emetteur_user_id !== user.id && f.dest_user_id !== user.id) {
+    return c.text('Accès refusé', 403)
+  }
+
+  const html = renderFactureHTML(full)
+  return new Response(html, {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' }
+  })
+})
+
+// ============================================================
+// GET /api/factures/:id/envois — historique des envois email
+// ============================================================
+app.get('/:id/envois', async (c) => {
+  const user = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  const f = await c.env.DB.prepare(
+    'SELECT emetteur_user_id, dest_user_id FROM factures WHERE id = ?'
+  ).bind(id).first() as any
+  if (!f) return c.json({ error: 'Introuvable' }, 404)
+  if (user.role !== 'superadmin' && f.emetteur_user_id !== user.id && f.dest_user_id !== user.id) {
+    return c.json({ error: 'Accès refusé' }, 403)
+  }
+  const { results } = await c.env.DB.prepare(`
+    SELECT fe.*, u.prenom as envoye_par_prenom, u.nom as envoye_par_nom
+    FROM facture_envois fe
+    LEFT JOIN users u ON fe.envoye_par = u.id
+    WHERE fe.facture_id = ?
+    ORDER BY fe.envoye_at DESC
+  `).bind(id).all()
+  return c.json({ envois: results || [] })
+})
+
+// ============================================================
+// POST /api/factures/:id/email — envoi manuel d'un email
+// Body : { evenement?: 'rappel'|'manuel'|..., destinataire_email?: string }
+// ============================================================
+app.post('/:id/email', async (c) => {
+  const user = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({}))
+  const evenement = (body.evenement as any) || 'manuel'
+  const overrideEmail = body.destinataire_email || null
+
+  const f = await c.env.DB.prepare(
+    'SELECT emetteur_user_id, dest_user_id, statut FROM factures WHERE id = ?'
+  ).bind(id).first() as any
+  if (!f) return c.json({ error: 'Introuvable' }, 404)
+  if (user.role !== 'superadmin' && f.emetteur_user_id !== user.id) {
+    return c.json({ error: 'Accès refusé' }, 403)
+  }
+
+  // L'événement 'manuel' utilise le template 'rappel' par défaut
+  const evtTemplate = evenement === 'manuel' ? 'rappel' : evenement
+  const result = await notifyFactureEvent(c.env.DB, id, evtTemplate, user.id, overrideEmail)
+
+  if (result.skipped && !overrideEmail) {
+    return c.json({
+      error: 'Aucun email destinataire (renseigner dest_email sur la facture ou fournir destinataire_email)'
+    }, 400)
+  }
+  if (!result.sent) {
+    return c.json({ error: result.error || 'Échec envoi' }, 500)
+  }
   return c.json({ success: true })
 })
 

@@ -293,6 +293,7 @@ const ADMIN_NAV = [
   { id: 'audit', label: 'Audit invisible', icon: 'fa-eye-slash' },
   { section: 'CONFIGURATION' },
   { id: 'paliers', label: 'Paliers', icon: 'fa-layer-group' },
+  { id: 'admin-email-settings', label: 'Notifications email', icon: 'fa-envelope-open-text' },
   { id: 'profil', label: 'Mon profil', icon: 'fa-user' }
 ]
 
@@ -4516,6 +4517,146 @@ async function openDerogDetailModal(id, onClosed) {
   }
 }
 
+// ============================================================
+// === PARAMÈTRES EMAIL (Resend) ==============================
+// ============================================================
+PAGES['admin-email-settings'] = async (c) => {
+  const { data } = await api.get('/admin/settings/email')
+  const s = data.settings
+  c.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1><i class="fas fa-envelope-open-text"></i> Notifications email</h1>
+        <div class="subtitle">Configuration des envois automatiques de factures (Resend API)</div>
+      </div>
+    </div>
+
+    <div class="card" style="max-width:800px">
+      <div class="card-title"><i class="fas fa-cog"></i> Configuration</div>
+
+      <div class="form-group">
+        <label>État du service</label>
+        <div style="display:flex;gap:.75rem;align-items:center;padding:.6rem;background:${s.email_enabled === '1' ? '#ecfdf5' : '#fef3c7'};border-radius:6px">
+          <strong style="color:${s.email_enabled === '1' ? '#065f46' : '#92400e'}">
+            <i class="fas fa-${s.email_enabled === '1' ? 'check-circle' : 'pause-circle'}"></i>
+            ${s.email_enabled === '1' ? 'Envoi réel ACTIF' : 'Mode LOG (aucun email envoyé)'}
+          </strong>
+          <label class="switch" style="margin-left:auto;display:flex;align-items:center;gap:.5rem;cursor:pointer">
+            <input type="checkbox" id="emailEnabled" ${s.email_enabled === '1' ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer">
+            <span>Activer l'envoi réel</span>
+          </label>
+        </div>
+        <small class="text-muted">En mode log, les emails ne sont pas envoyés mais l'historique est tracé. Désactivez pour les phases de test.</small>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Provider</label>
+          <select id="emailProvider">
+            <option value="resend" ${s.email_provider === 'resend' ? 'selected' : ''}>Resend (recommandé)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>URL publique de l'application</label>
+          <input id="appBaseUrl" type="url" value="${escapeHtml(s.app_base_url)}" placeholder="https://votre-domaine.com" />
+          <small class="text-muted">Utilisé dans les liens des emails (lien vers le PDF de facture)</small>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Email expéditeur <span class="req">*</span></label>
+          <input id="emailFromAddr" type="email" value="${escapeHtml(s.email_from_address)}" placeholder="no-reply@votredomaine.com" />
+          <small class="text-muted">Doit être un domaine vérifié dans votre compte Resend</small>
+        </div>
+        <div class="form-group">
+          <label>Nom expéditeur</label>
+          <input id="emailFromName" value="${escapeHtml(s.email_from_name)}" placeholder="DropEat™" />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Adresse Reply-To (optionnel)</label>
+        <input id="emailReplyTo" type="email" value="${escapeHtml(s.email_reply_to)}" placeholder="support@votredomaine.com" />
+      </div>
+
+      <div class="form-group">
+        <label>Clé API Resend ${s.email_api_key_set ? '<span class="badge badge-primary">configurée</span>' : '<span class="badge badge-danger">non configurée</span>'}</label>
+        ${s.email_api_key_set ? `<div style="padding:.5rem;background:#f9fafb;border-radius:6px;font-family:monospace;font-size:.85rem;margin-bottom:.5rem">${escapeHtml(s.email_api_key_preview)}</div>` : ''}
+        <input id="emailApiKey" type="password" placeholder="${s.email_api_key_set ? 'Laisser vide pour conserver l’actuelle' : 'Saisir votre clé Resend re_xxxxxxxx'}" autocomplete="new-password" />
+        <div style="margin-top:.5rem;display:flex;gap:.5rem">
+          ${s.email_api_key_set ? `<button class="btn btn-sm btn-danger" id="delApiKey"><i class="fas fa-trash"></i> Supprimer la clé</button>` : ''}
+          <a href="https://resend.com/api-keys" target="_blank" class="btn btn-sm btn-secondary"><i class="fas fa-external-link-alt"></i> Obtenir une clé Resend</a>
+        </div>
+        <small class="text-muted" style="display:block;margin-top:.4rem">La clé est stockée chiffrée en base. Format attendu : <code>re_...</code></small>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" id="saveSettings"><i class="fas fa-save"></i> Enregistrer</button>
+        <button class="btn btn-secondary" id="testEmail"><i class="fas fa-paper-plane"></i> Envoyer un email de test</button>
+      </div>
+    </div>
+
+    <div class="card" style="max-width:800px;margin-top:1rem">
+      <div class="card-title"><i class="fas fa-info-circle"></i> Événements déclenchant un email</div>
+      <ul style="line-height:1.8;padding-left:1.5rem">
+        <li><span class="badge" style="background:#dbeafe;color:#1e40af">Créée</span> &mdash; déclenchable manuellement</li>
+        <li><span class="badge" style="background:#fed7aa;color:#9a3412">Envoyée</span> &mdash; <strong>automatique</strong> lors du clic "Envoyer" par l'émetteur</li>
+        <li><span class="badge" style="background:#d1fae5;color:#065f46">Validée</span> &mdash; <strong>automatique</strong> lors de la validation par superadmin</li>
+        <li><span class="badge badge-danger">Refusée</span> &mdash; <strong>automatique</strong> lors du refus par superadmin (motif inclus)</li>
+        <li><span class="badge badge-primary">Payée</span> &mdash; <strong>automatique</strong> lors du marquage paiement par superadmin</li>
+        <li><span class="badge" style="background:#fef3c7;color:#92400e">Rappel</span> &mdash; déclenchable depuis le détail de la facture (bouton "Envoyer par email")</li>
+      </ul>
+      <p style="margin-top:.75rem;color:#6b7280;font-size:.88rem">
+        <i class="fas fa-lightbulb"></i> L'email destinataire est résolu dans cet ordre :
+        <code>facture.dest_email</code> → <code>destinataire.email_facturation</code> → email du user destinataire.
+        Si aucun n'est trouvé, l'envoi est silencieusement ignoré (sans erreur).
+      </p>
+    </div>
+  `
+
+  document.getElementById('saveSettings').onclick = async () => {
+    const apiKey = document.getElementById('emailApiKey').value.trim()
+    const body = {
+      email_enabled: document.getElementById('emailEnabled').checked,
+      email_provider: document.getElementById('emailProvider').value,
+      app_base_url: document.getElementById('appBaseUrl').value.trim(),
+      email_from_address: document.getElementById('emailFromAddr').value.trim(),
+      email_from_name: document.getElementById('emailFromName').value.trim(),
+      email_reply_to: document.getElementById('emailReplyTo').value.trim()
+    }
+    if (apiKey) body.email_api_key = apiKey
+    try {
+      await api.put('/admin/settings/email', body)
+      toast('Paramètres enregistrés')
+      navigate('admin-email-settings')
+    } catch (err) {
+      toast(err.response?.data?.error || 'Erreur', 'error')
+    }
+  }
+
+  document.getElementById('testEmail').onclick = async () => {
+    const to = prompt('Email destinataire du test :', CURRENT_USER.email || '')
+    if (!to) return
+    try {
+      const r = await api.post('/admin/settings/email/test', { to })
+      toast(r.data.message, r.data.success ? 'success' : 'error')
+    } catch (err) {
+      toast(err.response?.data?.error || 'Erreur', 'error')
+    }
+  }
+
+  const del = document.getElementById('delApiKey')
+  if (del) del.onclick = () => confirmDialog(
+    'Supprimer la clé API Resend ? Le service email sera désactivé.',
+    async () => {
+      await api.delete('/admin/settings/email/api-key')
+      toast('Clé supprimée')
+      navigate('admin-email-settings')
+    }
+  )
+}
+
 // --- Paliers ---
 PAGES['paliers'] = async (c) => {
   const { data } = await api.get('/admin/paliers')
@@ -7584,10 +7725,54 @@ async function factureViewerModal(id) {
       ${f.motif_refus ? `<div class="invoice-refusal"><strong>Motif de refus :</strong> ${escapeHtml(f.motif_refus)}</div>` : ''}
     </div>
   `
-  const m = modal(`<i class="fas fa-file-invoice"></i> Facture ${escapeHtml(f.numero)}`, html + `
-    <div class="form-actions" style="margin-top:1rem">
+  // Récupère l'historique d'envois email
+  let envoisHTML = ''
+  try {
+    const { data: envoisData } = await api.get('/factures/' + id + '/envois')
+    const envois = envoisData.envois || []
+    if (envois.length) {
+      const evtBadge = {
+        creee: '<span class="badge" style="background:#dbeafe;color:#1e40af">Créée</span>',
+        envoyee: '<span class="badge" style="background:#fed7aa;color:#9a3412">Envoyée</span>',
+        validee: '<span class="badge" style="background:#d1fae5;color:#065f46">Validée</span>',
+        refusee: '<span class="badge badge-danger">Refusée</span>',
+        payee: '<span class="badge badge-primary">Payée</span>',
+        rappel: '<span class="badge" style="background:#fef3c7;color:#92400e">Rappel</span>',
+        manuel: '<span class="badge badge-secondary">Manuel</span>'
+      }
+      const statutBadge = (s) => s === 'sent'
+        ? '<span style="color:var(--success)"><i class="fas fa-check-circle"></i> envoyé</span>'
+        : s === 'failed'
+          ? '<span style="color:var(--danger)"><i class="fas fa-times-circle"></i> échec</span>'
+          : '<span class="text-muted">' + escapeHtml(s) + '</span>'
+      envoisHTML = `
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+          <div style="font-weight:bold;margin-bottom:.5rem"><i class="fas fa-envelope"></i> Historique des envois email (${envois.length})</div>
+          <div class="table-wrap" style="max-height:240px;overflow-y:auto">
+            <table class="data-table" style="font-size:.85rem">
+              <thead><tr><th>Date</th><th>Évt</th><th>Destinataire</th><th>Statut</th><th>Émis par</th></tr></thead>
+              <tbody>${envois.map(e => `
+                <tr>
+                  <td>${fmtDateTime(e.envoye_at)}</td>
+                  <td>${evtBadge[e.evenement] || escapeHtml(e.evenement)}</td>
+                  <td>${escapeHtml(e.destinataire_email)}${e.destinataire_nom ? '<br><small class="text-muted">' + escapeHtml(e.destinataire_nom) + '</small>' : ''}</td>
+                  <td>${statutBadge(e.statut)}${e.error_message ? '<br><small class="text-muted">' + escapeHtml(e.error_message) + '</small>' : ''}</td>
+                  <td>${e.envoye_par_prenom ? escapeHtml(e.envoye_par_prenom + ' ' + (e.envoye_par_nom || '')) : '<span class="text-muted">système</span>'}</td>
+                </tr>`).join('')}</tbody>
+            </table>
+          </div>
+        </div>`
+    }
+  } catch (e) { /* silent */ }
+
+  const m = modal(`<i class="fas fa-file-invoice"></i> Facture ${escapeHtml(f.numero)}`, html + envoisHTML + `
+    <div class="form-actions" style="margin-top:1rem;flex-wrap:wrap">
       <button type="button" class="btn btn-secondary" data-close>Fermer</button>
       <button type="button" class="btn btn-primary" id="printBtn"><i class="fas fa-print"></i> Imprimer / PDF</button>
+      <button type="button" class="btn btn-secondary" id="pdfBtn" title="Ouvrir le PDF dans un nouvel onglet"><i class="fas fa-file-pdf"></i> PDF (nouvel onglet)</button>
+      ${(CURRENT_USER.role === 'superadmin' || f.emetteur_user_id === CURRENT_USER.id) ? `
+        <button type="button" class="btn btn-secondary" id="emailBtn" title="Envoyer la facture par email"><i class="fas fa-paper-plane"></i> Envoyer par email</button>
+      ` : ''}
       ${CURRENT_USER.role === 'superadmin' && f.statut === 'envoyee' ? `
         <button type="button" class="btn btn-danger" id="refusBtn"><i class="fas fa-times"></i> Refuser</button>
         <button type="button" class="btn btn-primary" id="validBtn"><i class="fas fa-check"></i> Valider</button>
@@ -7599,6 +7784,26 @@ async function factureViewerModal(id) {
   `)
   m.el.querySelector('[data-close]').onclick = () => m.close()
   m.el.querySelector('#printBtn').onclick = () => printInvoice(m.el.querySelector('#factureToPrint'))
+  const pdfBtn = m.el.querySelector('#pdfBtn')
+  if (pdfBtn) pdfBtn.onclick = () => window.open('/api/factures/' + id + '/pdf', '_blank')
+  const emailBtn = m.el.querySelector('#emailBtn')
+  if (emailBtn) emailBtn.onclick = async () => {
+    const defaultEmail = (f.dest_email || f.dest || {}).email_facturation || f.dest_user_email || ''
+    const dest = prompt('Adresse email destinataire (laisser vide pour utiliser celle de la facture) :', defaultEmail)
+    if (dest === null) return
+    try {
+      const r = await api.post('/factures/' + id + '/email', {
+        evenement: 'manuel',
+        destinataire_email: dest || undefined
+      })
+      toast('Email envoyé')
+      m.close()
+      // Réouvre la modale pour rafraîchir l'historique
+      setTimeout(() => factureViewerModal(id), 200)
+    } catch (err) {
+      toast(err.response?.data?.error || 'Erreur envoi', 'error')
+    }
+  }
   const vb = m.el.querySelector('#validBtn')
   if (vb) vb.onclick = async () => {
     try { await api.post('/factures/' + id + '/valider'); toast('Facture validée'); m.close(); navigate(CURRENT_USER.role === 'superadmin' ? 'admin-factures' : 'a-factures') }
