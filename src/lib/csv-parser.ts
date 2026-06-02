@@ -111,7 +111,8 @@ const COLUMN_MAPPINGS = {
     "heure de la commande", 'order time', 'heure commande', 'time'
   ],
   total: [
-    'montant moyen des commandes', 'order total', 'total commande',
+    'montant moyen des commandes', 'valeur moyenne de la commande',
+    'order total', 'total commande',
     'sales (incl. tax)', 'gross sales', 'montant total', 'ventes', 'subtotal',
     'total', 'sales'
   ],

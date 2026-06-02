@@ -33,6 +33,7 @@ import demandesPaiement from './routes/demandes-paiement'
 import challenges from './routes/challenges'
 import adminSettings from './routes/admin-settings'
 import adminTranches from './routes/admin-tranches'
+import notifications from './routes/notifications'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -64,6 +65,9 @@ app.route('/api/admin/derogations', adminDerogations)
 app.route('/api/admin/settings', adminSettings)
 app.route('/api/admin/tranches', adminTranches)
 app.route('/api/shortener', adminShortener)
+
+// Notifications (tout user authentifié)
+app.route('/api/notifications', notifications)
 
 // Profils société (tout user authentifié)
 app.route('/api/societes', societes)

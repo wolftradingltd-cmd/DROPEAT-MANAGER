@@ -64,6 +64,40 @@ function confirmDialog(message, onConfirm) {
   m.el.querySelector('#confirmOK').onclick = async () => { m.close(); await onConfirm() }
 }
 
+/**
+ * openModal — wrapper robuste supportant 2 signatures :
+ *  - openModal(titleHtml, bodyHtml, opts?)   ← style legacy (titre peut contenir du HTML)
+ *  - openModal({ title, body, width, footer }) ← style nouveau
+ * Crée une overlay basique sans escapeHtml du titre (pour permettre les icônes).
+ */
+function openModal(arg1, arg2, arg3) {
+  let titleHtml, bodyHtml, opts = {}
+  if (typeof arg1 === 'object' && arg1 !== null && !Array.isArray(arg1)) {
+    titleHtml = arg1.title || ''
+    bodyHtml = arg1.body || ''
+    opts = arg1
+  } else {
+    titleHtml = arg1 || ''
+    bodyHtml = arg2 || ''
+    opts = arg3 || {}
+  }
+  const w = document.createElement('div')
+  w.className = 'modal-overlay'
+  const sizeStyle = opts.width ? `style="max-width:${opts.width};width:100%"` : ''
+  const sizeClass = opts.size === 'lg' ? ' modal-lg' : opts.size === 'xl' ? ' modal-xl' : ''
+  w.innerHTML = `
+    <div class="modal${sizeClass}" ${sizeStyle}>
+      <div class="modal-header"><h3 style="margin:0">${titleHtml}</h3><button class="modal-close">&times;</button></div>
+      <div class="modal-body">${bodyHtml}</div>
+      ${opts.footer ? `<div class="modal-footer">${opts.footer}</div>` : ''}
+    </div>`
+  document.body.appendChild(w)
+  const close = () => w.remove()
+  w.querySelector('.modal-close').addEventListener('click', close)
+  w.addEventListener('click', e => { if (e.target === w) close() })
+  return { el: w, close }
+}
+
 // Variante avec titre + description (utilisée par PAGES['marques'])
 function confirmModal(title, description, onConfirm, opts = {}) {
   const m = modal(title, `<p>${escapeHtml(description)}</p>`, {
@@ -278,6 +312,7 @@ const ADMIN_NAV = [
   { id: 'prospects', label: 'Leads & Prospects', icon: 'fa-bullseye' },
   { section: 'OPÉRATIONS' },
   { id: 'imports', label: 'Imports CSV', icon: 'fa-file-csv' },
+  { id: 'imports-a-valider', label: 'Imports à valider', icon: 'fa-clipboard-check', badge: 'imports_a_valider' },
   { id: 'commissions', label: 'Commissions', icon: 'fa-coins' },
   { id: 'derogations', label: 'Dérogations 100%', icon: 'fa-star' },
   { id: 'paiements', label: 'Paiements', icon: 'fa-money-check-dollar' },
@@ -330,7 +365,10 @@ function renderApp(mode) {
   const u = CURRENT_USER
   const navHtml = nav.map(item => {
     if (item.section) return `<div class="nav-section">${item.section}</div>`
-    return `<a href="#" data-page="${item.id}"><i class="fas ${item.icon}"></i> ${item.label}</a>`
+    const badgeSpan = item.badge
+      ? `<span class="nav-badge" data-badge-key="${item.badge}" style="background:#dc2626;color:#fff;border-radius:999px;padding:.05rem .45rem;font-size:.65rem;margin-left:auto;display:none;font-weight:700"></span>`
+      : ''
+    return `<a href="#" data-page="${item.id}" style="display:flex;align-items:center;gap:.5rem"><i class="fas ${item.icon}"></i><span style="flex:1">${item.label}</span>${badgeSpan}</a>`
   }).join('')
 
   document.getElementById('app').innerHTML = `
@@ -346,6 +384,11 @@ function renderApp(mode) {
           <div class="user-name">${escapeHtml(u.prenom)} ${escapeHtml(u.nom)}</div>
           <div class="user-role">${escapeHtml(u.email)}</div>
           <div class="user-role">${mode === 'admin' ? 'Super-administrateur' : niveauLabel(u.niveau)}</div>
+          <div id="notifBell" style="margin-top:.5rem;padding:.4rem .5rem;background:#1e293b;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:#e2e8f0">
+            <i class="fas fa-bell" style="color:#fbbf24"></i>
+            <span>Notifications</span>
+            <span id="notifCount" style="margin-left:auto;background:#dc2626;color:#fff;border-radius:999px;padding:.05rem .45rem;font-size:.65rem;display:none;font-weight:700">0</span>
+          </div>
         </div>
         <nav class="sidebar-nav">${navHtml}</nav>
         <div class="sidebar-footer">
@@ -354,6 +397,12 @@ function renderApp(mode) {
       </aside>
       <main class="main-content" id="mainContent"></main>
     </div>`
+
+  // Cloche notifications
+  document.getElementById('notifBell').onclick = () => navigate('notifications')
+
+  // Poller : rafraîchit le badge toutes les 30s + à chaque navigation
+  startBadgePoller()
 
   document.getElementById('btnLogout').onclick = async () => {
     await api.post('/auth/logout').catch(() => {})
@@ -378,7 +427,39 @@ function renderApp(mode) {
   navigate(first)
 }
 
+// Poller du badge notif + imports à valider
+let __badgePollerHandle = null
+async function refreshBadges() {
+  try {
+    const { data } = await api.get('/notifications/count')
+    // Badge cloche
+    const nc = document.getElementById('notifCount')
+    if (nc) {
+      if (data.non_lues > 0) {
+        nc.textContent = data.non_lues > 99 ? '99+' : data.non_lues
+        nc.style.display = 'inline-block'
+      } else { nc.style.display = 'none' }
+    }
+    // Badges nav (par clé)
+    document.querySelectorAll('.nav-badge[data-badge-key]').forEach(b => {
+      const key = b.dataset.badgeKey
+      const v = data[key] || 0
+      if (v > 0) {
+        b.textContent = v > 99 ? '99+' : v
+        b.style.display = 'inline-block'
+      } else { b.style.display = 'none' }
+    })
+  } catch (e) { /* silent */ }
+}
+function startBadgePoller() {
+  if (__badgePollerHandle) clearInterval(__badgePollerHandle)
+  refreshBadges()
+  __badgePollerHandle = setInterval(refreshBadges, 30000)
+}
+
 function navigate(page) {
+  // Rafraîchit aussi le badge à chaque navigation (pour voir tout de suite)
+  refreshBadges()
   const c = document.getElementById('mainContent')
   c.innerHTML = '<div class="loading-screen" style="min-height:300px"><div class="spinner"></div></div>'
 
@@ -2925,24 +3006,26 @@ async function loadImportsPage(c, baseEndpoint) {
           <div style="font-size:1.4rem;font-weight:700;color:#0f172a">${fmtEUR(imp.data.totaux.ca_brut)}</div>
           <div class="text-muted" style="font-size:.78rem">${imp.data.totaux.nb_imports} import(s)</div>
         </div>
+        ${imp.data.totaux.ca_dropeat_brut !== undefined ? `
         <div class="stat-card" style="background:#eef6ff;border:1px solid #c7dffd;border-radius:8px;padding:.9rem">
           <div class="text-muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em">CA DropEat brut</div>
           <div style="font-size:1.4rem;font-weight:700;color:#1e40af">${fmtEUR(imp.data.totaux.ca_dropeat_brut)}</div>
           <div class="text-muted" style="font-size:.78rem">facturable aux restaurants</div>
-        </div>
+        </div>` : ''}
         <div class="stat-card" style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:.9rem">
-          <div class="text-muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em">Commissions agents</div>
+          <div class="text-muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em">Commissions ${isAdmin ? 'agents' : 'totales'}</div>
           <div style="font-size:1.4rem;font-weight:700;color:#92400e">${fmtEUR(imp.data.totaux.commissions_total)}</div>
           <div class="text-muted" style="font-size:.78rem">
             propre ${fmtEUR(imp.data.totaux.commissions_propre)} · pf ${fmtEUR(imp.data.totaux.commissions_portefeuille)}<br>
             N+1 ${fmtEUR(imp.data.totaux.commissions_n1)} · N+2 ${fmtEUR(imp.data.totaux.commissions_n2)}
           </div>
         </div>
+        ${imp.data.totaux.marge_dropeat_nette !== undefined ? `
         <div class="stat-card" style="background:#e8f7ee;border:1px solid #bbe5cb;border-radius:8px;padding:.9rem">
           <div class="text-muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em">Marge nette DropEat</div>
           <div style="font-size:1.4rem;font-weight:700;color:#06A05A">${fmtEUR(imp.data.totaux.marge_dropeat_nette)}</div>
           <div class="text-muted" style="font-size:.78rem">CA DropEat − toutes commissions</div>
-        </div>
+        </div>` : ''}
       </div>` : ''}
     <div class="card">
       <div class="card-title"><i class="fas fa-history"></i> Historique des imports — financier</div>
@@ -2953,16 +3036,28 @@ async function loadImportsPage(c, baseEndpoint) {
               <th>Date</th><th>Restaurant / Marque</th><th>Période</th>
               <th class="text-right">Cmd</th>
               <th class="text-right">CA resto</th>
-              <th class="text-right">CA DropEat</th>
-              <th class="text-right">Comm. agents</th>
-              <th class="text-right">Marge nette</th>
-              <th>Agent</th>
+              ${isAdmin ? '<th class="text-right">CA DropEat</th>' : ''}
+              <th class="text-right">Comm. ${isAdmin ? 'agents' : 'mes'}</th>
+              ${isAdmin ? '<th class="text-right">Marge nette</th>' : ''}
+              <th>Statut</th>
+              <th>${isAdmin ? 'Agent' : 'Source'}</th>
               <th class="text-right">Actions</th>
             </tr></thead>
             <tbody>${imp.data.imports.map(i => {
               const pf = i.marque_pf || i.resto_pf
+              const vs = i.validation_statut || 'valide'
+              const vsBadge = vs === 'valide'
+                ? '<span class="badge" style="background:#dcfce7;color:#166534;font-size:.7rem"><i class="fas fa-check-circle"></i> Validé</span>'
+                : vs === 'en_attente_validation'
+                ? '<span class="badge" style="background:#fef3c7;color:#92400e;font-size:.7rem"><i class="fas fa-clock"></i> À valider</span>'
+                : '<span class="badge" style="background:#fee2e2;color:#991b1b;font-size:.7rem"><i class="fas fa-ban"></i> Rejeté</span>'
+              const src = i.source_upload || 'admin'
+              const srcBadge = src === 'admin_pour_agent'
+                ? '<span class="badge" style="background:#e0e7ff;color:#3730a3;font-size:.65rem">Admin pour vous</span>'
+                : src === 'agent' ? '<span class="badge" style="background:#f1f5f9;color:#475569;font-size:.65rem">Vous</span>'
+                : ''
               return `
-              <tr>
+              <tr ${vs === 'en_attente_validation' ? 'style="background:#fffbeb"' : ''} ${vs === 'rejete' ? 'style="background:#fef2f2;opacity:.75"' : ''}>
                 <td>
                   ${fmtDateTime(i.created_at)}
                   <div class="text-muted" style="font-size:.72rem">${escapeHtml(i.nom_fichier || '-')}</div>
@@ -2974,18 +3069,21 @@ async function loadImportsPage(c, baseEndpoint) {
                 <td>${i.periode_debut ? fmtDate(i.periode_debut) + ' → ' + fmtDate(i.periode_fin) : '-'}</td>
                 <td class="text-right">${fmtNum(i.nb_commandes_reel || 0)}</td>
                 <td class="text-right">${fmtEUR(i.ca_brut || 0)}</td>
-                <td class="text-right" style="color:#1e40af;font-weight:600">${pf ? '<span class="text-muted">—</span>' : fmtEUR(i.ca_dropeat_brut || 0)}</td>
+                ${isAdmin ? `<td class="text-right" style="color:#1e40af;font-weight:600">${pf ? '<span class="text-muted">—</span>' : fmtEUR(i.ca_dropeat_brut || 0)}</td>` : ''}
                 <td class="text-right" style="color:#92400e">
                   ${fmtEUR((i.commissions_propre || 0) + (i.commissions_portefeuille || 0) + (i.commissions_n1 || 0) + (i.commissions_n2 || 0))}
                 </td>
-                <td class="text-right" style="color:#06A05A;font-weight:600">${pf ? '0,00 €' : fmtEUR(i.marge_dropeat_nette || 0)}</td>
-                <td>${i.agent_prenom ? escapeHtml(i.agent_prenom + ' ' + i.agent_nom) : '-'}</td>
+                ${isAdmin ? `<td class="text-right" style="color:#06A05A;font-weight:600">${pf ? '0,00 €' : fmtEUR(i.marge_dropeat_nette || 0)}</td>` : ''}
+                <td>${vsBadge}</td>
+                <td>${isAdmin ? (i.agent_prenom ? escapeHtml(i.agent_prenom + ' ' + i.agent_nom) : '-') : srcBadge}</td>
                 <td class="text-right" style="white-space:nowrap">
                   <button class="btn btn-sm btn-secondary" data-details="${i.id}" title="Détail commissions"><i class="fas fa-eye"></i></button>
                   <button class="btn btn-sm btn-secondary" data-download="${i.id}" title="Télécharger CSV"><i class="fas fa-download"></i></button>
+                  ${isAdmin && vs === 'en_attente_validation' ? `<button class="btn btn-sm btn-success" data-valider="${i.id}" title="Valider"><i class="fas fa-check"></i></button>` : ''}
+                  ${isAdmin && vs === 'en_attente_validation' ? `<button class="btn btn-sm btn-warning" data-rejeter="${i.id}" title="Rejeter"><i class="fas fa-times"></i></button>` : ''}
                   ${isAdmin ? `<button class="btn btn-sm btn-secondary" data-recalc="${i.id}" title="Recalculer commissions"><i class="fas fa-calculator"></i></button>` : ''}
-                  ${isAdmin && !pf ? `<button class="btn btn-sm btn-primary" data-fact="${i.id}" data-resto="${i.restaurant_nom}" title="Créer facture"><i class="fas fa-file-invoice"></i></button>` : ''}
-                  <button class="btn btn-sm btn-danger" data-del="${i.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+                  ${isAdmin && !pf && vs === 'valide' ? `<button class="btn btn-sm btn-primary" data-fact="${i.id}" data-resto="${i.restaurant_nom}" title="Créer facture"><i class="fas fa-file-invoice"></i></button>` : ''}
+                  ${isAdmin ? `<button class="btn btn-sm btn-danger" data-del="${i.id}" title="Supprimer"><i class="fas fa-trash"></i></button>` : ''}
                 </td>
               </tr>`}).join('')}</tbody>
           </table>
@@ -3276,6 +3374,34 @@ async function loadImportsPage(c, baseEndpoint) {
       )
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   })
+
+  // VALIDER un import en attente (admin uniquement)
+  c.querySelectorAll('[data-valider]').forEach(b => b.onclick = () => confirmDialog(
+    'Valider cet import ?\n\nLes commissions seront comptabilisées dans les factures.',
+    async () => {
+      try {
+        await api.post('/admin/imports/' + b.dataset.valider + '/valider', { notes: '' })
+        toast('Import validé. Les commissions sont prises en compte.', 'success')
+        navigate('imports')
+      } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+    }
+  ))
+
+  // REJETER un import en attente (admin uniquement)
+  c.querySelectorAll('[data-rejeter]').forEach(b => b.onclick = async () => {
+    const notes = prompt("Motif du rejet (obligatoire) :")
+    if (!notes || !notes.trim()) { toast('Motif requis', 'error'); return }
+    confirmDialog(
+      `Rejeter cet import ?\n\nMotif : ${notes}\n\nLes commissions ne seront PAS comptabilisées.`,
+      async () => {
+        try {
+          await api.post('/admin/imports/' + b.dataset.rejeter + '/rejeter', { notes })
+          toast('Import rejeté.', 'success')
+          navigate('imports')
+        } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+      }
+    )
+  })
 }
 
 // === Modal détail import : breakdown par marque + par agent ===
@@ -3530,6 +3656,334 @@ function openEditCommandeModal(co, baseEndpoint, importId, onSaved) {
       if (onSaved) onSaved()
     } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
   }
+}
+
+// ============================================================
+// PAGE : Imports à valider (admin uniquement)
+// ============================================================
+PAGES['imports-a-valider'] = async (c) => {
+  c.innerHTML = '<div class="loading-screen" style="min-height:300px"><div class="spinner"></div></div>'
+  let data
+  try {
+    const r = await api.get('/admin/imports/a-valider')
+    data = r.data
+  } catch (e) {
+    c.innerHTML = `<div class="empty-state"><i class="fas fa-circle-exclamation"></i><p>${escapeHtml(e.response?.data?.error || 'Erreur')}</p></div>`
+    return
+  }
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1><i class="fas fa-clipboard-check"></i> Imports à valider <span style="background:#dc2626;color:#fff;border-radius:999px;padding:.15rem .55rem;font-size:.75rem;margin-left:.5rem">${data.nb}</span></h1>
+        <div class="subtitle">Uploads agents en attente de votre validation. Les commissions ne sont PAS facturables tant qu'elles ne sont pas validées.</div>
+      </div>
+      <div>
+        <button class="btn btn-secondary" id="btnRefresh"><i class="fas fa-sync"></i> Rafraîchir</button>
+        <button class="btn btn-primary" id="btnUploadPourAgent"><i class="fas fa-user-plus"></i> Uploader pour un agent</button>
+      </div>
+    </div>
+
+    <div class="card">
+      ${data.imports.length === 0 ? `
+        <div class="empty-state" style="padding:2rem;text-align:center">
+          <i class="fas fa-check-circle" style="font-size:3rem;color:#16a34a;margin-bottom:1rem"></i>
+          <h3 style="color:#16a34a;margin:0">Tout est à jour</h3>
+          <p class="text-muted">Aucun import n'attend votre validation.</p>
+        </div>
+      ` : `
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr>
+              <th>Reçu le</th>
+              <th>Agent uploader</th>
+              <th>Restaurant / Marque</th>
+              <th>Source</th>
+              <th>Période</th>
+              <th class="text-right">Lignes</th>
+              <th class="text-right">CA brut</th>
+              <th class="text-right">Actions</th>
+            </tr></thead>
+            <tbody>${data.imports.map(i => `
+              <tr style="background:#fffbeb">
+                <td>
+                  ${fmtDateTime(i.created_at)}
+                  <div class="text-muted" style="font-size:.72rem">${escapeHtml(i.nom_fichier || '-')}</div>
+                </td>
+                <td>${escapeHtml((i.uploader_prenom || '') + ' ' + (i.uploader_nom || ''))}<br><span class="text-muted" style="font-size:.72rem">${escapeHtml(i.uploader_email || '')}</span></td>
+                <td><strong>${escapeHtml(i.restaurant_nom)}</strong><br><span class="text-muted">${escapeHtml(i.marque_nom)}</span></td>
+                <td>
+                  ${i.source_upload === 'agent' ? '<span class="badge" style="background:#dbeafe;color:#1e40af">Agent</span>' :
+                    i.source_upload === 'admin_pour_agent' ? '<span class="badge" style="background:#e0e7ff;color:#3730a3">Admin pour agent</span>' :
+                    '<span class="badge" style="background:#f1f5f9;color:#475569">Admin</span>'}
+                </td>
+                <td>${i.periode_debut ? fmtDate(i.periode_debut) + ' → ' + fmtDate(i.periode_fin) : '-'}</td>
+                <td class="text-right">${fmtNum(i.nb_lignes_importees || 0)}</td>
+                <td class="text-right">${fmtEUR(i.montant_total || 0)}</td>
+                <td class="text-right" style="white-space:nowrap">
+                  <button class="btn btn-sm btn-secondary" data-details="${i.id}" title="Voir le détail"><i class="fas fa-eye"></i> Détails</button>
+                  <button class="btn btn-sm btn-success" data-valider="${i.id}"><i class="fas fa-check"></i> Valider</button>
+                  <button class="btn btn-sm btn-warning" data-rejeter="${i.id}"><i class="fas fa-times"></i> Rejeter</button>
+                </td>
+              </tr>`).join('')}</tbody>
+          </table>
+        </div>
+      `}
+    </div>`
+
+  c.querySelector('#btnRefresh').onclick = () => navigate('imports-a-valider')
+  c.querySelector('#btnUploadPourAgent').onclick = () => openUploadPourAgentModal()
+
+  c.querySelectorAll('[data-details]').forEach(b => b.onclick = () => {
+    // Réutilise la modale existante de la page imports
+    navigate('imports')
+    setTimeout(() => {
+      const btn = document.querySelector(`button[data-details="${b.dataset.details}"]`)
+      btn?.click()
+    }, 400)
+  })
+
+  c.querySelectorAll('[data-valider]').forEach(b => b.onclick = () => confirmDialog(
+    'Valider cet import ?\n\nLes commissions seront comptabilisées dans les factures.',
+    async () => {
+      try {
+        await api.post('/admin/imports/' + b.dataset.valider + '/valider', { notes: '' })
+        toast('Import validé.', 'success')
+        navigate('imports-a-valider')
+      } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+    }
+  ))
+
+  c.querySelectorAll('[data-rejeter]').forEach(b => b.onclick = async () => {
+    const notes = prompt("Motif du rejet (obligatoire) :")
+    if (!notes || !notes.trim()) { toast('Motif requis', 'error'); return }
+    confirmDialog(
+      `Rejeter cet import ?\n\nMotif : ${notes}\n\nLes commissions ne seront PAS comptabilisées.`,
+      async () => {
+        try {
+          await api.post('/admin/imports/' + b.dataset.rejeter + '/rejeter', { notes })
+          toast('Import rejeté.', 'success')
+          navigate('imports-a-valider')
+        } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error') }
+      }
+    )
+  })
+}
+
+// Modale : Admin upload pour un agent
+async function openUploadPourAgentModal() {
+  // Charger la liste des agents + leurs marques
+  const [agentsRes, marquesRes] = await Promise.all([
+    api.get('/admin/agents-crud').catch(() => ({ data: { agents: [] } })),
+    api.get('/admin/restaurants/marques/all').catch(() => ({ data: { marques: [] } }))
+  ])
+  const agents = agentsRes.data.agents || []
+  const marques = marquesRes.data.marques || []
+
+  const m = openModal({
+    title: '<i class="fas fa-user-plus"></i> Uploader pour un agent',
+    width: '720px',
+    body: `
+      <div class="info-banner" style="background:#fef3c7;border-left:3px solid #d97706;padding:.6rem .9rem;border-radius:6px;margin-bottom:1rem;font-size:.85rem">
+        <i class="fas fa-circle-info"></i>
+        L'agent recevra une notification. Le fichier sera <strong>validé automatiquement</strong> (commissions comptabilisées immédiatement).
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Agent <span class="req">*</span></label>
+          <select id="ua_agent" required>
+            <option value="">— Sélectionner —</option>
+            ${agents.map(a => `<option value="${a.id}">${escapeHtml(a.prenom + ' ' + a.nom)} · ${escapeHtml(a.email)} · N${a.niveau || 0}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Marque <span class="req">*</span></label>
+          <select id="ua_marque" required disabled>
+            <option value="">— Choisir d'abord un agent —</option>
+          </select>
+        </div>
+      </div>
+      <div class="upload-zone" id="ua_drop" style="margin-top:1rem">
+        <i class="fas fa-file-csv"></i>
+        <h3>Glissez-déposez le fichier CSV ici</h3>
+        <div class="hint">ou cliquez pour parcourir</div>
+        <input type="file" id="ua_file" style="display:none" accept=".csv,.tsv,.txt"/>
+      </div>
+      <div id="ua_preview" style="margin-top:1rem"></div>
+      <div style="margin-top:1rem;text-align:right">
+        <button class="btn btn-secondary" id="ua_cancel">Annuler</button>
+        <button class="btn btn-primary" id="ua_submit" disabled><i class="fas fa-upload"></i> Importer + Valider</button>
+      </div>`
+  })
+
+  const $a = m.el.querySelector('#ua_agent')
+  const $marque = m.el.querySelector('#ua_marque')
+  const $file = m.el.querySelector('#ua_file')
+  const $drop = m.el.querySelector('#ua_drop')
+  const $preview = m.el.querySelector('#ua_preview')
+  const $submit = m.el.querySelector('#ua_submit')
+  let pendingCsv = null, pendingFilename = null
+
+  // Filtrer les marques selon l'agent sélectionné (branche descendante)
+  // Calcul côté client : on construit la descendance de l'agent à partir de la liste agents
+  function descendantsOf(agentId) {
+    const ids = new Set([agentId])
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const a of agents) {
+        if (a.parent_id && ids.has(a.parent_id) && !ids.has(a.id)) {
+          ids.add(a.id); changed = true
+        }
+      }
+    }
+    return ids
+  }
+
+  $a.onchange = () => {
+    const agentId = parseInt($a.value)
+    if (!agentId) {
+      $marque.disabled = true
+      $marque.innerHTML = '<option value="">— Choisir d\'abord un agent —</option>'
+      return
+    }
+    const brancheIds = descendantsOf(agentId)
+    const filtered = marques.filter(mq => brancheIds.has(mq.agent_id))
+    $marque.disabled = false
+    $marque.innerHTML = '<option value="">— Sélectionner —</option>' +
+      (filtered.length === 0
+        ? '<option value="" disabled>(aucune marque dans la branche de cet agent)</option>'
+        : filtered.map(mq => `<option value="${mq.id}">${escapeHtml(mq.restaurant_nom + ' / ' + mq.nom)}${mq.uber_store_id ? ' · ' + escapeHtml(mq.uber_store_id) : ''}</option>`).join(''))
+  }
+
+  $drop.onclick = () => $file.click()
+  $drop.ondragover = e => { e.preventDefault(); $drop.classList.add('dragover') }
+  $drop.ondragleave = () => $drop.classList.remove('dragover')
+  $drop.ondrop = e => { e.preventDefault(); $drop.classList.remove('dragover'); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]) }
+  $file.onchange = e => { if (e.target.files[0]) loadFile(e.target.files[0]) }
+
+  function loadFile(f) {
+    const reader = new FileReader()
+    reader.onload = async () => {
+      pendingCsv = reader.result
+      pendingFilename = f.name
+      try {
+        const { data } = await api.post('/admin/imports/preview', { csv: pendingCsv })
+        $preview.innerHTML = `
+          <div class="card" style="background:#f8fafc">
+            <div class="card-title"><i class="fas fa-eye"></i> Aperçu : ${escapeHtml(f.name)}</div>
+            <div>${data.nb_lignes} ligne(s) détectée(s) · délimiteur "${escapeHtml(data.delimiter)}"</div>
+            <div class="text-muted" style="font-size:.78rem;margin-top:.4rem">
+              Marque détectée dans le CSV : ${data.marque_suggeree ? escapeHtml(data.marque_suggeree.nom || data.marque_suggeree.nom_detecte || '?') : '<em>aucune</em>'}
+            </div>
+          </div>`
+        $submit.disabled = !($a.value && $marque.value && pendingCsv)
+      } catch (e) {
+        $preview.innerHTML = `<div class="alert alert-error">${escapeHtml(e.response?.data?.error || 'Erreur preview')}</div>`
+      }
+    }
+    reader.readAsText(f)
+  }
+
+  ;[$a, $marque].forEach(el => el.addEventListener('change', () => {
+    $submit.disabled = !($a.value && $marque.value && pendingCsv)
+  }))
+
+  m.el.querySelector('#ua_cancel').onclick = () => m.close()
+  $submit.onclick = async () => {
+    $submit.disabled = true
+    try {
+      const { data } = await api.post('/admin/imports/admin-pour-agent', {
+        agent_id: parseInt($a.value),
+        marque_id: parseInt($marque.value),
+        csv: pendingCsv,
+        nom_fichier: pendingFilename
+      })
+      toast(`Importé : ${data.nb_importees} commandes (validé). Notification envoyée à l'agent.`, 'success', 5000)
+      m.close()
+      navigate('imports-a-valider')
+    } catch (e) {
+      toast(e.response?.data?.error || 'Erreur', 'error')
+      $submit.disabled = false
+    }
+  }
+}
+
+// ============================================================
+// PAGE : Notifications (agent + admin)
+// ============================================================
+PAGES['notifications'] = async (c) => {
+  c.innerHTML = '<div class="loading-screen" style="min-height:300px"><div class="spinner"></div></div>'
+  const { data } = await api.get('/notifications?limit=100&statut=all')
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1><i class="fas fa-bell"></i> Notifications</h1><div class="subtitle">Mes notifications récentes</div></div>
+      <div><button class="btn btn-secondary" id="btnAllRead"><i class="fas fa-check-double"></i> Tout marquer lu</button></div>
+    </div>
+    <div class="card">
+      ${data.notifications.length === 0
+        ? '<p class="text-muted">Aucune notification</p>'
+        : `<div style="display:flex;flex-direction:column;gap:.6rem">
+          ${data.notifications.map(n => {
+            const iconMap = {
+              'import_a_valider': 'fa-clipboard-check',
+              'import_pour_vous': 'fa-upload',
+              'import_valide': 'fa-check-circle',
+              'import_rejete': 'fa-circle-xmark',
+              'demande_attribution': 'fa-trophy',
+              'facture_emise': 'fa-file-invoice'
+            }
+            const colorMap = {
+              'import_valide': '#16a34a',
+              'import_rejete': '#dc2626',
+              'import_a_valider': '#d97706',
+              'import_pour_vous': '#3730a3'
+            }
+            const icon = iconMap[n.type] || 'fa-bell'
+            const color = colorMap[n.type] || '#475569'
+            return `
+              <div data-notif-id="${n.id}" data-notif-lien="${escapeHtml(n.lien || '')}" style="padding:.8rem 1rem;background:${n.lu ? '#f8fafc' : '#fffbeb'};border-left:3px solid ${color};border-radius:6px;cursor:pointer;display:flex;gap:.8rem;align-items:start">
+                <i class="fas ${icon}" style="color:${color};font-size:1.2rem;margin-top:.15rem"></i>
+                <div style="flex:1">
+                  <div style="font-weight:${n.lu ? '500' : '700'}">${escapeHtml(n.titre)}</div>
+                  <div class="text-muted" style="font-size:.85rem">${escapeHtml(n.message)}</div>
+                  <div class="text-muted" style="font-size:.7rem;margin-top:.2rem">${fmtDateTime(n.created_at)}</div>
+                </div>
+                <button class="btn btn-sm btn-secondary" data-del-notif="${n.id}" title="Supprimer"><i class="fas fa-trash"></i></button>
+              </div>`
+          }).join('')}
+        </div>`}
+    </div>`
+
+  c.querySelector('#btnAllRead').onclick = async () => {
+    await api.post('/notifications/tout-lu')
+    toast('Toutes marquées lues')
+    refreshBadges()
+    navigate('notifications')
+  }
+
+  c.querySelectorAll('[data-notif-id]').forEach(el => {
+    el.onclick = async (e) => {
+      if (e.target.closest('[data-del-notif]')) return
+      const id = el.dataset.notifId
+      const lien = el.dataset.notifLien
+      await api.post('/notifications/' + id + '/lu').catch(() => {})
+      refreshBadges()
+      // Suivre le lien (en remplaçant le hash)
+      if (lien && lien.startsWith('/app#')) {
+        const page = lien.replace(/^\/app#/, '').split('/')[0]
+        if (page) navigate(page)
+      }
+    }
+  })
+
+  c.querySelectorAll('[data-del-notif]').forEach(b => b.onclick = async (e) => {
+    e.stopPropagation()
+    await api.delete('/notifications/' + b.dataset.delNotif)
+    navigate('notifications')
+    refreshBadges()
+  })
 }
 
 // --- Commissions ---

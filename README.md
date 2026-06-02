@@ -52,6 +52,48 @@ Application web complète pour gérer le suivi des commissions de votre activit�
 
 ## 🆕 Nouveautés (session courante)
 
+### 🛡️ Phase 4 — Renforcement du système de commissions (Migration 0021)
+
+**Objectif** : commissions EXACTES pour tous (DropEat, agents, sous-agents, sous-sous-agents) + indépendance des fichiers (renommage Uber/Deliveroo sans casse) + **cloisonnement total** : les agents ne doivent **JAMAIS** connaître la marge DropEat.
+
+#### Workflow hybride de validation
+1. **Agent** uploade un CSV → choisit la cible (restaurant/marque) → calcul IMMÉDIAT des commissions (pour visualisation)
+2. Import marqué `validation_statut='en_attente_validation'` → notif `import_a_valider` envoyée à tous les admins
+3. **Admin** consulte `/imports-a-valider`, vérifie le détail, puis :
+   - **Valider** → propagation `valide` sur les commandes → notif `import_valide` à l'agent → commandes **incluses** dans les factures
+   - **Rejeter** (notes obligatoires) → propagation `rejete` → notif `import_rejete` à l'agent → commandes **exclues** des factures
+4. **Admin upload pour un agent oublié** : endpoint `/admin-pour-agent` (validation auto) → notif `import_pour_vous` à l'agent
+
+#### Cloisonnement données (helper `src/lib/commission-view.ts`)
+**Agents NE VOIENT JAMAIS** :
+- `ca_dropeat_brut` (CA total DropEat)
+- `marge_dropeat_nette` (marge nette DropEat)
+- `facturation_*` (toute info de facturation restaurant)
+- Ligne `DROPEAT` dans la répartition `par_agent`
+
+Seul `role='superadmin'` voit ces données (via `canSeeMargeDropEat()`).
+
+#### Exclusion des commandes non-validées dans les factures
+9 requêtes SQL dans `src/lib/factures.ts` patchées avec `AND c.validation_statut = 'valide'` :
+- Seules les commandes validées sont facturables
+- `auto-commissions.ts` reste intact (calcul pour visualisation, le filtrage est au moment de la facture)
+
+#### Live visibility (badges + cloche)
+- Polling `/api/notifications/count` toutes les 30s + sur chaque navigation
+- Badges sur les entrées du menu (`imports_a_valider` pour admin, `non_lues` pour tous)
+- Page `notifications` dédiée avec marquage lu/non-lu + suppression
+- Tinting des lignes selon statut (jaune `en_attente`, rouge `rejete`)
+
+#### Parsing CSV multi-variants
+- Variant A (récent) : `"Id. externe du restaurant"` / `"Montant moyen des commandes"`
+- Variant B (ancien) : `"Identifiant externe du restaurant"` / `"Valeur moyenne de la commande"`
+- Détection robuste par `normalize()` + match exact ou "contient" — renommage de fichier sans impact
+
+#### Tests E2E (`scripts/test-imports-v2.sh`)
+**51 ✅ / 0 ❌** — 12 sections couvrant : auth, notifs, agent upload→en_attente, cloisonnement vue agent, vue admin, /a-valider, validation, rejet, exclusion factures, admin-pour-agent, ACL (401/403), notifs CRUD.
+
+---
+
 ### 💰 Refonte complète du système de facturation (Phase B — modules 1→5)
 
 **Problème résolu** : l'ancien écran "Facturer un restaurant" listait uniquement les restaurants sans laisser choisir les marques. La nouvelle facturation est multi-marques, supporte le mode groupé/séparé, et sépare les commissions MLM dans un scope dédié.

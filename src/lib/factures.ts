@@ -212,7 +212,7 @@ export async function buildLignesFactureAgent(
       JOIN restaurants r ON m.restaurant_id = r.id
       LEFT JOIN commandes c ON c.marque_id = m.id
         AND c.date_commande >= ? AND c.date_commande <= ?
-        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
         AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
         AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
       WHERE r.agent_id = ?
@@ -254,7 +254,7 @@ export async function buildLignesFactureAgent(
       JOIN users uChild ON r.agent_id = uChild.id
       WHERE uChild.parent_id = ?
         AND c.date_commande >= ? AND c.date_commande <= ?
-        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
         AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
         AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
       GROUP BY uChild.id
@@ -287,7 +287,7 @@ export async function buildLignesFactureAgent(
       JOIN users uChild ON uGrand.parent_id = uChild.id
       WHERE uChild.parent_id = ?
         AND c.date_commande >= ? AND c.date_commande <= ?
-        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+        AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
         AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
         AND COALESCE(r.is_portefeuille_proprietaire, 0) = 0
       GROUP BY uGrand.id
@@ -356,7 +356,7 @@ export async function buildLignesFactureRestaurant(
     FROM marques_virtuelles m
     LEFT JOIN commandes c ON c.marque_id = m.id
       AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
     WHERE m.restaurant_id = ?
       AND COALESCE(m.is_portefeuille_proprietaire, 0) = 0
       ${extra.join(' ')}
@@ -424,7 +424,7 @@ export async function listMarquesFacturablesResto(
     FROM marques_virtuelles m
     LEFT JOIN commandes c ON c.marque_id = m.id
       AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
     WHERE m.restaurant_id = ?
     GROUP BY m.id
     ORDER BY m.id
@@ -490,7 +490,7 @@ export async function listMarquesFacturablesAgent(
     JOIN restaurants r ON m.restaurant_id = r.id
     LEFT JOIN commandes c ON c.marque_id = m.id
       AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
     WHERE r.agent_id = ?
     GROUP BY m.id
     ORDER BY r.nom, m.nom
@@ -569,7 +569,7 @@ export async function buildLignesFactureAgentResto(
     JOIN restaurants r ON m.restaurant_id = r.id
     LEFT JOIN commandes c ON c.marque_id = m.id
       AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
     WHERE r.id = ?
       AND r.agent_id = ?
       AND (
@@ -646,7 +646,7 @@ export async function listRestosPortefeuilleAvecCommandes(
     JOIN marques_virtuelles m ON m.restaurant_id = r.id
     LEFT JOIN commandes c ON c.marque_id = m.id
       AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
       AND (
         COALESCE(m.is_portefeuille_proprietaire, 0) = 1
         OR COALESCE(r.is_portefeuille_proprietaire, 0) = 1
@@ -706,7 +706,7 @@ export async function listMarquesPortefeuilleResto(
     JOIN restaurants r ON m.restaurant_id = r.id
     LEFT JOIN commandes c ON c.marque_id = m.id
       AND c.date_commande >= ? AND c.date_commande <= ?
-      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee')
+      AND c.statut NOT IN ('annulee', 'remboursee', 'impayee', 'resiliee') AND c.validation_statut = 'valide'
     WHERE r.id = ?
       AND r.agent_id = ?
       AND (

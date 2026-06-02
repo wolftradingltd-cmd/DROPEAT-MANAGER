@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Bindings } from '../types'
 import { requireAuth, type AuthVariables } from '../middleware/auth'
 import { parseCsv, detectColumns, parseNumber, parseDate, normalizeStatus } from '../lib/csv-parser'
+import { sanitizeImportsListForAgent, sanitizeImportForAgent, canSeeMargeDropEat } from '../lib/commission-view'
 
 const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>()
 
@@ -120,35 +121,69 @@ app.post('/preview', async (c) => {
   })
 })
 
-// POST /api/imports - Importer les commandes
-app.post('/', async (c) => {
-  const user = c.get('user')
-  const body = await c.req.json()
-  const { marque_id, csv, nom_fichier, mapping } = body
-
-  if (!marque_id || !csv) return c.json({ error: 'marque_id et csv requis' }, 400)
-
-  const canUpload = await userCanUploadForMarque(c.env.DB, user, marque_id)
-  if (!canUpload) return c.json({ error: 'Vous n\'avez pas accès à cette marque' }, 403)
+// ============================================================
+// runImport : fonction partagée (utilisée par POST /, /agent, /admin-pour-agent)
+// Crée l'import + commandes + déclenche calcul commissions.
+// validationStatut : 'valide' (admin) ou 'en_attente_validation' (agent)
+// ============================================================
+async function runImport(
+  db: D1Database,
+  params: {
+    marque_id: number
+    csv: string
+    nom_fichier?: string | null
+    mapping?: any
+    uploader_user_id: number
+    pour_agent_id: number | null
+    source_upload: 'agent' | 'admin' | 'admin_pour_agent'
+    validation_statut: 'en_attente_validation' | 'valide'
+  }
+): Promise<{
+  import_id: number
+  nb_lignes: number
+  nb_importees: number
+  nb_doublons: number
+  nb_erreurs: number
+  montant_total: number
+  periode: { debut: string | null, fin: string | null }
+  commissions_auto?: any
+  error?: string
+}> {
+  const { marque_id, csv, nom_fichier, mapping, uploader_user_id,
+          pour_agent_id, source_upload, validation_statut } = params
 
   const { rows, headers } = parseCsv(csv)
-  if (rows.length === 0) return c.json({ error: 'CSV vide' }, 400)
+  if (rows.length === 0) {
+    return { import_id: 0, nb_lignes: 0, nb_importees: 0, nb_doublons: 0,
+             nb_erreurs: 0, montant_total: 0, periode: { debut: null, fin: null },
+             error: 'CSV vide' }
+  }
 
   const cols = mapping || detectColumns(headers)
-
-  if (!cols.date) return c.json({ error: 'Colonne date introuvable' }, 400)
+  if (!cols.date) {
+    return { import_id: 0, nb_lignes: rows.length, nb_importees: 0, nb_doublons: 0,
+             nb_erreurs: 0, montant_total: 0, periode: { debut: null, fin: null },
+             error: 'Colonne date introuvable' }
+  }
   if (!cols.total && !cols.net) {
-    return c.json({ error: 'Au moins une colonne montant (total ou net) requise' }, 400)
+    return { import_id: 0, nb_lignes: rows.length, nb_importees: 0, nb_doublons: 0,
+             nb_erreurs: 0, montant_total: 0, periode: { debut: null, fin: null },
+             error: 'Au moins une colonne montant (total ou net) requise' }
   }
 
   let nb_importees = 0, nb_doublons = 0, nb_erreurs = 0, total_montant = 0
   let date_min: string | null = null, date_max: string | null = null
 
-  const importRes = await c.env.DB.prepare(`
-    INSERT INTO imports_csv (marque_id, uploader_user_id, nom_fichier, nb_lignes, statut)
-    VALUES (?, ?, ?, ?, 'en_cours')
-  `).bind(marque_id, user.id, nom_fichier || null, rows.length).run()
-  const import_id = importRes.meta.last_row_id
+  const importRes = await db.prepare(`
+    INSERT INTO imports_csv
+      (marque_id, uploader_user_id, nom_fichier, nb_lignes, statut,
+       validation_statut, pour_agent_id, source_upload)
+    VALUES (?, ?, ?, ?, 'en_cours', ?, ?, ?)
+  `).bind(
+    marque_id, uploader_user_id, nom_fichier || null, rows.length,
+    validation_statut, pour_agent_id, source_upload
+  ).run()
+  const import_id = importRes.meta.last_row_id as number
 
   for (const row of rows) {
     try {
@@ -166,29 +201,32 @@ app.post('/', async (c) => {
       const statut = normalizeStatus(statutRaw)
       const type_honoree = cols.type_honoree ? row[cols.type_honoree] : null
 
-      // Ignorer les annulées (CA = 0)
       if (statut === 'annulee') { nb_erreurs++; continue }
 
       // Doublon ? Priorité UUID, fallback order_id
       if (uuid) {
-        const existing = await c.env.DB.prepare(
+        const existing = await db.prepare(
           'SELECT id FROM commandes WHERE uber_uuid = ?'
         ).bind(uuid).first()
         if (existing) { nb_doublons++; continue }
       } else if (order_id) {
-        const existing = await c.env.DB.prepare(
+        const existing = await db.prepare(
           'SELECT id FROM commandes WHERE marque_id = ? AND uber_order_id = ?'
         ).bind(marque_id, order_id).first()
         if (existing) { nb_doublons++; continue }
       }
 
-      await c.env.DB.prepare(`
-        INSERT INTO commandes (marque_id, uber_order_id, uber_uuid, type_honoree, date_commande, montant_brut, frais_uber, montant_net, statut, raw_data, import_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      // Les commandes héritent du validation_statut de l'import
+      await db.prepare(`
+        INSERT INTO commandes
+          (marque_id, uber_order_id, uber_uuid, type_honoree, date_commande,
+           montant_brut, frais_uber, montant_net, statut, raw_data, import_id,
+           validation_statut)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         marque_id, order_id || null, uuid || null, type_honoree || null, date,
         total, uber_fee, net, statut,
-        JSON.stringify(row), import_id
+        JSON.stringify(row), import_id, validation_statut
       ).run()
 
       nb_importees++
@@ -200,7 +238,7 @@ app.post('/', async (c) => {
     }
   }
 
-  await c.env.DB.prepare(`
+  await db.prepare(`
     UPDATE imports_csv SET
       nb_lignes_importees = ?, nb_doublons = ?, montant_total = ?,
       periode_debut = ?, periode_fin = ?, statut = ?
@@ -213,21 +251,286 @@ app.post('/', async (c) => {
     import_id
   ).run()
 
-  // === CALCUL AUTOMATIQUE DES COMMISSIONS ===
-  // Recalcule chaque mois impacté par cet import
+  // Calcul commissions automatique (toujours déclenché — pour visu agent,
+  // mais commandes non validées sont exclues des factures via factures.ts)
   let commissionsCalcul: any = null
   try {
     const { recalculerPeriodesImpactees } = await import('../lib/auto-commissions')
-    commissionsCalcul = await recalculerPeriodesImpactees(c.env.DB, import_id as number)
+    commissionsCalcul = await recalculerPeriodesImpactees(db, import_id)
   } catch (e: any) {
     console.error('Erreur calcul auto commissions:', e?.message || e)
   }
 
-  return c.json({
-    success: true, import_id, nb_lignes: rows.length,
-    nb_importees, nb_doublons, nb_erreurs, montant_total: total_montant,
+  return {
+    import_id, nb_lignes: rows.length, nb_importees, nb_doublons, nb_erreurs,
+    montant_total: total_montant,
     periode: { debut: date_min, fin: date_max },
     commissions_auto: commissionsCalcul
+  }
+}
+
+/**
+ * Récupère l'agent_id propriétaire d'un resto via marque_id.
+ */
+async function agentIdForMarque(db: D1Database, marque_id: number): Promise<number | null> {
+  const r = await db.prepare(`
+    SELECT r.agent_id FROM marques_virtuelles m
+    JOIN restaurants r ON m.restaurant_id = r.id
+    WHERE m.id = ?
+  `).bind(marque_id).first() as any
+  return r?.agent_id ?? null
+}
+
+/**
+ * Récupère la chaîne MLM (N+1, N+2) d'un agent.
+ */
+async function chaineMLM(db: D1Database, agent_id: number): Promise<{ n1: number | null, n2: number | null }> {
+  const a = await db.prepare('SELECT parent_id FROM users WHERE id = ?').bind(agent_id).first() as any
+  if (!a?.parent_id) return { n1: null, n2: null }
+  const p = await db.prepare('SELECT parent_id FROM users WHERE id = ?').bind(a.parent_id).first() as any
+  return { n1: a.parent_id, n2: p?.parent_id ?? null }
+}
+
+// POST /api/imports - Endpoint historique (compatibilité ascendante)
+// - Admin : validation_statut='valide' direct (mode actuel préservé)
+// - Agent : validation_statut='en_attente_validation' + notif admin
+app.post('/', async (c) => {
+  const user = c.get('user')
+  const body = await c.req.json()
+  const { marque_id, csv, nom_fichier, mapping } = body
+
+  if (!marque_id || !csv) return c.json({ error: 'marque_id et csv requis' }, 400)
+
+  const canUpload = await userCanUploadForMarque(c.env.DB, user, marque_id)
+  if (!canUpload) return c.json({ error: 'Vous n\'avez pas accès à cette marque' }, 403)
+
+  // Détermination du workflow selon le rôle
+  const isAdmin = user.role === 'superadmin'
+  const agentMarque = await agentIdForMarque(c.env.DB, marque_id)
+
+  const result = await runImport(c.env.DB, {
+    marque_id, csv, nom_fichier, mapping,
+    uploader_user_id: user.id,
+    pour_agent_id: isAdmin ? agentMarque : user.id,
+    source_upload: isAdmin ? 'admin' : 'agent',
+    validation_statut: isAdmin ? 'valide' : 'en_attente_validation'
+  })
+
+  if (result.error) return c.json({ error: result.error }, 400)
+
+  // Notification admin si c'est un agent qui upload
+  if (!isAdmin && result.import_id) {
+    try {
+      const { results: admins } = await c.env.DB.prepare(
+        "SELECT id FROM users WHERE role = 'superadmin'"
+      ).all() as any
+      for (const adm of (admins || [])) {
+        await c.env.DB.prepare(`
+          INSERT INTO notifications (destinataire_id, type, titre, message, lien, metadata)
+          VALUES (?, 'import_a_valider', ?, ?, ?, ?)
+        `).bind(
+          adm.id,
+          'Nouvel import à valider',
+          `${user.prenom || ''} ${user.nom || ''} a uploadé un fichier (${result.nb_importees} commandes)`,
+          `/app#imports/${result.import_id}`,
+          JSON.stringify({ import_id: result.import_id, agent_id: user.id, marque_id })
+        ).run()
+      }
+    } catch (e: any) {
+      console.error('Notif admin échouée:', e?.message || e)
+    }
+  }
+
+  return c.json({ success: true, ...result })
+})
+
+// POST /api/imports/admin-pour-agent — Admin upload pour un agent absent
+// Body : { agent_id, marque_id, csv, nom_fichier?, mapping? }
+// → import créé avec source='admin_pour_agent', validation_statut='valide'
+// → notification ENVOYÉE à l'agent : "import fait pour ton compte"
+app.post('/admin-pour-agent', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') {
+    return c.json({ error: 'Réservé au superadmin' }, 403)
+  }
+  const body = await c.req.json()
+  const { agent_id, marque_id, csv, nom_fichier, mapping } = body
+  if (!agent_id || !marque_id || !csv) {
+    return c.json({ error: 'agent_id, marque_id et csv requis' }, 400)
+  }
+
+  // Vérifie que la marque appartient bien à l'agent (ou à sa branche)
+  const m = await c.env.DB.prepare(`
+    SELECT r.agent_id FROM marques_virtuelles m
+    JOIN restaurants r ON m.restaurant_id = r.id
+    WHERE m.id = ?
+  `).bind(marque_id).first() as any
+  if (!m) return c.json({ error: 'Marque introuvable' }, 404)
+
+  // Vérifie que agent_id est dans la branche du resto (ancêtre ou propriétaire)
+  let inBranche = (m.agent_id === Number(agent_id))
+  if (!inBranche) {
+    let cur = m.agent_id
+    while (cur && !inBranche) {
+      if (cur === Number(agent_id)) { inBranche = true; break }
+      const p = await c.env.DB.prepare('SELECT parent_id FROM users WHERE id = ?').bind(cur).first() as any
+      cur = p?.parent_id || null
+    }
+  }
+  if (!inBranche) {
+    return c.json({ error: "Cet agent n'est pas lié à cette marque" }, 403)
+  }
+
+  const result = await runImport(c.env.DB, {
+    marque_id, csv, nom_fichier, mapping,
+    uploader_user_id: user.id,
+    pour_agent_id: Number(agent_id),
+    source_upload: 'admin_pour_agent',
+    validation_statut: 'valide'  // admin upload = direct validé
+  })
+
+  if (result.error) return c.json({ error: result.error }, 400)
+
+  // Notif à l'agent concerné
+  if (result.import_id) {
+    try {
+      await c.env.DB.prepare(`
+        INSERT INTO notifications (destinataire_id, type, titre, message, lien, metadata)
+        VALUES (?, 'import_pour_vous', ?, ?, ?, ?)
+      `).bind(
+        Number(agent_id),
+        "L'admin a uploadé un fichier pour votre compte",
+        `${result.nb_importees} commandes importées et déjà validées. Vos commissions sont calculées.`,
+        `/app#mes-imports/${result.import_id}`,
+        JSON.stringify({ import_id: result.import_id, marque_id, uploader_admin: user.id })
+      ).run()
+    } catch (e: any) {
+      console.error('Notif agent échouée:', e?.message || e)
+    }
+  }
+
+  return c.json({ success: true, ...result })
+})
+
+// POST /api/imports/:id/valider — Admin valide un import en attente
+// → commandes passent validation_statut='valide' → factures les comptent
+app.post('/:id/valider', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') return c.json({ error: 'Réservé au superadmin' }, 403)
+  const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const { notes } = body || {}
+
+  const imp = await c.env.DB.prepare(
+    'SELECT id, validation_statut, uploader_user_id, pour_agent_id, marque_id FROM imports_csv WHERE id = ?'
+  ).bind(id).first() as any
+  if (!imp) return c.json({ error: 'Import introuvable' }, 404)
+  if (imp.validation_statut === 'valide') {
+    return c.json({ error: 'Déjà validé' }, 400)
+  }
+
+  await c.env.DB.prepare(`
+    UPDATE imports_csv
+    SET validation_statut = 'valide',
+        validation_par = ?, validation_at = CURRENT_TIMESTAMP,
+        validation_notes = ?
+    WHERE id = ?
+  `).bind(user.id, notes || null, id).run()
+
+  // Propage le statut aux commandes
+  await c.env.DB.prepare(`
+    UPDATE commandes SET validation_statut = 'valide' WHERE import_id = ?
+  `).bind(id).run()
+
+  // Notif à l'agent uploader
+  const destinataire = imp.pour_agent_id || imp.uploader_user_id
+  if (destinataire) {
+    await c.env.DB.prepare(`
+      INSERT INTO notifications (destinataire_id, type, titre, message, lien, metadata)
+      VALUES (?, 'import_valide', ?, ?, ?, ?)
+    `).bind(
+      destinataire,
+      'Import validé',
+      'Vos commissions sont maintenant comptabilisées dans les factures.',
+      `/app#mes-imports/${id}`,
+      JSON.stringify({ import_id: Number(id), validateur: user.id })
+    ).run()
+  }
+
+  return c.json({ success: true, import_id: Number(id), validation_statut: 'valide' })
+})
+
+// POST /api/imports/:id/rejeter — Admin rejette un import
+// → commandes passent validation_statut='rejete' → factures les ignorent
+app.post('/:id/rejeter', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') return c.json({ error: 'Réservé au superadmin' }, 403)
+  const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const { notes } = body || {}
+  if (!notes || !notes.trim()) {
+    return c.json({ error: 'Une raison de rejet (notes) est requise' }, 400)
+  }
+
+  const imp = await c.env.DB.prepare(
+    'SELECT id, validation_statut, uploader_user_id, pour_agent_id, marque_id FROM imports_csv WHERE id = ?'
+  ).bind(id).first() as any
+  if (!imp) return c.json({ error: 'Import introuvable' }, 404)
+
+  await c.env.DB.prepare(`
+    UPDATE imports_csv
+    SET validation_statut = 'rejete',
+        validation_par = ?, validation_at = CURRENT_TIMESTAMP,
+        validation_notes = ?
+    WHERE id = ?
+  `).bind(user.id, notes, id).run()
+
+  await c.env.DB.prepare(`
+    UPDATE commandes SET validation_statut = 'rejete' WHERE import_id = ?
+  `).bind(id).run()
+
+  const destinataire = imp.pour_agent_id || imp.uploader_user_id
+  if (destinataire) {
+    await c.env.DB.prepare(`
+      INSERT INTO notifications (destinataire_id, type, titre, message, lien, metadata)
+      VALUES (?, 'import_rejete', ?, ?, ?, ?)
+    `).bind(
+      destinataire,
+      'Import rejeté',
+      `Motif : ${notes}`,
+      `/app#mes-imports/${id}`,
+      JSON.stringify({ import_id: Number(id), validateur: user.id, motif: notes })
+    ).run()
+  }
+
+  return c.json({ success: true, import_id: Number(id), validation_statut: 'rejete' })
+})
+
+// GET /api/imports/a-valider — Liste des imports en attente de validation
+// Pour le badge admin + page "À valider"
+app.get('/a-valider', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'superadmin') return c.json({ error: 'Réservé au superadmin' }, 403)
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT i.id, i.nom_fichier, i.created_at, i.nb_lignes_importees, i.montant_total,
+           i.periode_debut, i.periode_fin, i.source_upload,
+           m.nom as marque_nom, m.id as marque_id,
+           r.nom as restaurant_nom, r.id as restaurant_id,
+           u.nom as uploader_nom, u.prenom as uploader_prenom, u.email as uploader_email,
+           ag.nom as agent_nom, ag.prenom as agent_prenom
+    FROM imports_csv i
+    JOIN marques_virtuelles m ON i.marque_id = m.id
+    JOIN restaurants r ON m.restaurant_id = r.id
+    LEFT JOIN users u ON i.uploader_user_id = u.id
+    LEFT JOIN users ag ON COALESCE(i.pour_agent_id, r.agent_id) = ag.id
+    WHERE i.validation_statut = 'en_attente_validation'
+    ORDER BY i.created_at DESC
+  `).all() as any
+
+  return c.json({
+    nb: (results || []).length,
+    imports: results || []
   })
 })
 
@@ -316,7 +619,7 @@ app.get('/', async (c) => {
     marge_dropeat_nette += +r.marge_dropeat_nette || 0
   }
 
-  return c.json({
+  const payload = {
     imports: results,
     totaux: {
       nb_imports,
@@ -329,7 +632,10 @@ app.get('/', async (c) => {
       commissions_total: comm_propre + comm_portefeuille + comm_n1 + comm_n2,
       marge_dropeat_nette
     }
-  })
+  }
+
+  // CLOISONNEMENT : si pas superadmin, on retire ca_dropeat_brut + marge_dropeat_nette
+  return c.json(sanitizeImportsListForAgent(user, payload))
 })
 
 // GET /api/imports/:id/details — Détail commissions d'un import
@@ -444,18 +750,22 @@ app.get('/:id/details', async (c) => {
     }
   }
 
-  // DropEat lui-même (marge nette)
-  par_agent.push({
-    agent_id: null, nom: 'DROPEAT', prenom: '', niveau: 'DROPEAT',
-    commission_propre: 0, commission_portefeuille: 0, commission_n1: 0, commission_n2: 0,
-    total: marge_dropeat_nette
-  })
+  // DropEat lui-même (marge nette) — visible uniquement par superadmin
+  const isSuperadmin = canSeeMargeDropEat(user)
+  if (isSuperadmin) {
+    par_agent.push({
+      agent_id: null, nom: 'DROPEAT', prenom: '', niveau: 'DROPEAT',
+      commission_propre: 0, commission_portefeuille: 0, commission_n1: 0, commission_n2: 0,
+      total: marge_dropeat_nette
+    })
+  }
 
   // Échantillon de commandes (50 max)
   const { results: commandes } = await c.env.DB.prepare(`
     SELECT
       c.id, c.uber_order_id, c.uber_uuid, c.date_commande, c.statut,
-      c.montant_brut, c.frais_uber, c.montant_net, c.montant_facture_resto,
+      c.montant_brut, c.frais_uber, c.montant_net,
+      ${isSuperadmin ? 'c.montant_facture_resto,' : ''}
       c.commission_agent_montant, c.commission_portefeuille_montant,
       c.commission_n1_montant, c.commission_n2_montant,
       m.nom as marque_nom
@@ -466,15 +776,32 @@ app.get('/:id/details', async (c) => {
     LIMIT 50
   `).bind(id).all() as any
 
+  // Sanitize totaux selon rôle
+  const totauxFinaux: any = {
+    nb_commandes: totaux?.nb_commandes || 0,
+    ca_brut: totaux?.ca_brut || 0,
+    comm_propre: totaux?.comm_propre || 0,
+    comm_portefeuille: totaux?.comm_portefeuille || 0,
+    comm_n1: totaux?.comm_n1 || 0,
+    comm_n2: totaux?.comm_n2 || 0,
+    commissions_total: (totaux?.comm_propre || 0) + (totaux?.comm_portefeuille || 0)
+                     + (totaux?.comm_n1 || 0) + (totaux?.comm_n2 || 0)
+  }
+  if (isSuperadmin) {
+    totauxFinaux.ca_dropeat_brut = totaux?.ca_dropeat_brut || 0
+    totauxFinaux.marge_dropeat_nette = marge_dropeat_nette
+  }
+
+  // Sanitize par_marque selon rôle (retire ca_dropeat_brut pour agents)
+  const par_marque_final = isSuperadmin ? par_marque : (par_marque || []).map((m: any) => {
+    const { ca_dropeat_brut, ...rest } = m
+    return rest
+  })
+
   return c.json({
-    import: imp,
-    totaux: {
-      ...(totaux || {}),
-      marge_dropeat_nette,
-      commissions_total: (totaux?.comm_propre || 0) + (totaux?.comm_portefeuille || 0)
-                       + (totaux?.comm_n1 || 0) + (totaux?.comm_n2 || 0)
-    },
-    par_marque,
+    import: isSuperadmin ? imp : sanitizeImportForAgent(imp),
+    totaux: totauxFinaux,
+    par_marque: par_marque_final,
     par_agent,
     commandes
   })
