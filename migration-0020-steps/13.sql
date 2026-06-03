@@ -1,0 +1,1 @@
+ALTER TABLE marques_virtuelles ADD COLUMN heritee_portefeuille INTEGER DEFAULT 0;

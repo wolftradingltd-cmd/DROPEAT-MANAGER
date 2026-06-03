@@ -1,0 +1,1 @@
+ALTER TABLE marques_virtuelles ADD COLUMN tranche_source_id INTEGER REFERENCES tranches_attribution(id);

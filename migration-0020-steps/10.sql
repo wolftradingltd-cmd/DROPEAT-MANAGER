@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_tranche_elements_agent_date ON tranche_elements(agent_id, date_qualification);

@@ -1,0 +1,1 @@
+ALTER TABLE tranche_elements_new RENAME TO tranche_elements;

@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_tranche_elements_tranche ON tranche_elements(tranche_id);

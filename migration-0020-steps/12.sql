@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_tranches_attribution_agent_statut ON tranches_attribution(agent_id, statut);

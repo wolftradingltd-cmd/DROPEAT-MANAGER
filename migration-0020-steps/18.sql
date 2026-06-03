@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_recalcul_agent ON tranches_recalcul_log(agent_id, executed_at);

@@ -1,0 +1,1 @@
+ALTER TABLE tranches_attribution_new RENAME TO tranches_attribution;

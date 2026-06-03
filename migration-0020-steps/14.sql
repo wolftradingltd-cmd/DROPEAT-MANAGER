@@ -1,0 +1,1 @@
+ALTER TABLE marques_virtuelles ADD COLUMN exclue_mlm INTEGER DEFAULT 0;

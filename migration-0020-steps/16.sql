@@ -1,0 +1,1 @@
+ALTER TABLE marques_virtuelles ADD COLUMN date_heritage DATETIME;
