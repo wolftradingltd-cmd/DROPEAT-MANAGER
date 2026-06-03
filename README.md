@@ -6,8 +6,10 @@
 - **Hébergement** : Genspark hosted Cloudflare (Worker + D1)
 - **Statut** : ✅ **Phase 4 déployée** (inscription libre + validation imports + cloisonnement agents)
 - **Connexion admin** : `admin@dropeat.io` / `admin123`
-- **Dernière màj** : 2026-06-03 (Phase 4 + register optionnel)
-- **Données prod** : 36 users actifs, 16 restos, 30 marques, 23 tranches, ~200 commandes
+- **Dernière màj** : 2026-06-03 (Phase 4 + register optionnel — Worker version `7f9ade9a`)
+- **Migrations appliquées** : jusqu'à `0021_imports_validation_v2.sql` inclus
+- **Données prod** : 37 users, 35 restos, 30 marques, 23 tranches, 54 tranche_elements, 203 commandes, 10 imports
+- **Tests E2E** : 51 ✅ / 0 ❌ (`bash scripts/test-imports-v2.sh`)
 
 ### Inscription
 - ✅ **Avec code d'invitation** → rattachement au parrain (héritage MLM)
