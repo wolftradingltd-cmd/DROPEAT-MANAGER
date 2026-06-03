@@ -464,7 +464,11 @@ function startBadgePoller() {
   __badgePollerHandle = setInterval(refreshBadges, 30000)
 }
 
+// État de navigation courant (utilisé par certains modules pour re-render après save)
+let CURRENT_PAGE = null
+
 function navigate(page) {
+  CURRENT_PAGE = page
   // Rafraîchit aussi le badge à chaque navigation (pour voir tout de suite)
   refreshBadges()
   const c = document.getElementById('mainContent')
