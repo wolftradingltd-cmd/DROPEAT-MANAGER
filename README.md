@@ -1,5 +1,24 @@
 # 🍔 DropEat™ - Suivi Commissions Uber Eats - MLM
 
+## 🌍 Production
+
+- **URL** : https://6cd1acbe-a814-4fef-8a1a-b0d4251e80b0.vip.gensparksite.com
+- **Hébergement** : Genspark hosted Cloudflare (Worker + D1)
+- **Statut** : ✅ **Phase 4 déployée** (inscription libre + validation imports + cloisonnement agents)
+- **Connexion admin** : `admin@dropeat.io` / `admin123`
+- **Dernière màj** : 2026-06-03 (Phase 4 + register optionnel)
+- **Données prod** : 36 users actifs, 16 restos, 30 marques, 23 tranches, ~200 commandes
+
+### Inscription
+- ✅ **Avec code d'invitation** → rattachement au parrain (héritage MLM)
+- ✅ **Sans code** → agent direct DropEat (niveau 0, notification aux superadmins)
+
+### Workflow validation imports (Phase 4)
+- 📤 Agent upload CSV → statut `en_attente_validation` + notification admin
+- 👮 Admin valide → bascule en `valide` + notification agent
+- 📤 Admin upload "pour agent" → notification `import_pour_vous` à l'agent
+- 🛡️ Agents ne voient **jamais** `ca_dropeat_brut`, `marge_dropeat_nette` (sanitization)
+
 ## ⚠️ DÉPLOIEMENT — LIRE EN PREMIER
 
 **Problème connu** : un `wrangler pages deploy` ne déploie que le **code**, **PAS la base D1**. Si vous avez 36 commerciaux + restaurants en local et que vous faites `Hosted Deployment`, la base distante reste vide.
